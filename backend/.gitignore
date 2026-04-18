@@ -1,0 +1,11 @@
+node_modules/
+npm-debug.log*
+
+# secrets
+.env
+.env.local
+
+# runtime data (per-job)
+uploads/
+results/
+runtime/
