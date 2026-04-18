@@ -12,7 +12,10 @@ function detectColumns(columns) {
   const treatment = TREATMENT_ALIASES.find(a => lower.includes(a))
   const outcome = OUTCOME_ALIASES.find(a => lower.includes(a))
   const age = AGE_ALIASES.find(a => lower.includes(a))
-  return { treatment, outcome, age, missing: [!age && 'age', !treatment && 'treatment column', !outcome && 'outcome column'].filter(Boolean) }
+  return {
+    treatment, outcome, age,
+    missing: [!age && 'age', !treatment && 'treatment column', !outcome && 'outcome column'].filter(Boolean)
+  }
 }
 
 const LOADING_STEPS = [
@@ -30,15 +33,11 @@ function Collapsible({ title, children, defaultOpen = false }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden', marginBottom: 10 }}>
-      <div
-        onClick={() => setOpen(o => !o)}
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', cursor: 'pointer', background: 'rgba(255,255,255,0.02)' }}
-      >
+      <div onClick={() => setOpen(o => !o)}
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', cursor: 'pointer', background: 'rgba(255,255,255,0.02)' }}>
         <span style={{ fontSize: 14, fontWeight: 500 }}>{title}</span>
-        <svg
-          width="20" height="20" fill="none" stroke="#185FA5" strokeWidth="2" viewBox="0 0 24 24"
-          style={{ transform: open ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}
-        >
+        <svg width="20" height="20" fill="none" stroke="#185FA5" strokeWidth="2" viewBox="0 0 24 24"
+          style={{ transform: open ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
         </svg>
       </div>
@@ -51,10 +50,15 @@ function Collapsible({ title, children, defaultOpen = false }) {
   )
 }
 
-function DemographicsTable({ csvData }) {
+function DemographicsTable({ csvData, detectedCols }) {
   if (!csvData || csvData.length === 0) return <p style={{ fontSize: 13, opacity: 0.5 }}>No data loaded.</p>
-  const arms = [...new Set(csvData.map(r => r.trt))]
-  const numericCols = ['age', 'wtkg', 'cd40', 'cd420', 'karnof'].filter(c => csvData[0]?.[c] !== undefined)
+  const trtCol = Object.keys(csvData[0]).find(k => TREATMENT_ALIASES.includes(k.toLowerCase())) || 'trt'
+  const arms = [...new Set(csvData.map(r => r[trtCol]))]
+  const allCols = Object.keys(csvData[0] || {})
+  const numericCols = allCols.filter(col => {
+    const vals = csvData.slice(0, 20).map(r => parseFloat(r[col]))
+    return vals.filter(v => !isNaN(v)).length > 15
+  }).filter(c => !['subject_id', 'site_id', 'enrollment_date'].includes(c.toLowerCase()))
 
   return (
     <div style={{ overflowX: 'auto' }}>
@@ -64,29 +68,27 @@ function DemographicsTable({ csvData }) {
             <th style={{ textAlign: 'left', padding: '8px 12px', borderBottom: '1px solid var(--border)', opacity: 0.5, fontWeight: 500 }}>Characteristic</th>
             {arms.map(arm => (
               <th key={arm} style={{ textAlign: 'right', padding: '8px 12px', borderBottom: '1px solid var(--border)', opacity: 0.5, fontWeight: 500 }}>
-                Arm {arm} (n={csvData.filter(r => r.trt === arm).length})
+                {arm} (n={csvData.filter(r => r[trtCol] === arm).length})
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {numericCols.map((col, i) => {
-            return (
-              <tr key={col} style={{ background: i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent' }}>
-                <td style={{ padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{col}</td>
-                {arms.map(arm => {
-                  const vals = csvData.filter(r => r.trt === arm).map(r => parseFloat(r[col])).filter(v => !isNaN(v))
-                  const mean = (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1)
-                  const sd = Math.sqrt(vals.reduce((a, b) => a + Math.pow(b - parseFloat(mean), 2), 0) / vals.length).toFixed(1)
-                  return (
-                    <td key={arm} style={{ textAlign: 'right', padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                      {mean} ± {sd}
-                    </td>
-                  )
-                })}
-              </tr>
-            )
-          })}
+          {numericCols.map((col, i) => (
+            <tr key={col} style={{ background: i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent' }}>
+              <td style={{ padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{col}</td>
+              {arms.map(arm => {
+                const vals = csvData.filter(r => r[trtCol] === arm).map(r => parseFloat(r[col])).filter(v => !isNaN(v))
+                const mean = vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1) : '—'
+                const sd = vals.length ? Math.sqrt(vals.reduce((a, b) => a + Math.pow(b - parseFloat(mean), 2), 0) / vals.length).toFixed(1) : '—'
+                return (
+                  <td key={arm} style={{ textAlign: 'right', padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                    {mean} ± {sd}
+                  </td>
+                )
+              })}
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
@@ -115,8 +117,8 @@ function EfficacyTable({ result }) {
 }
 
 function KMFigure({ result }) {
-  if (!result) return <p style={{ fontSize: 13, opacity: 0.5 }}>Run analysis to see survival curves.</p>
-  const W = 480, H = 220, PAD = { top: 16, right: 16, bottom: 36, left: 40 }
+  if (!result) return null
+  const W = 900, H = 340, PAD = { top: 24, right: 32, bottom: 48, left: 52 }
   const chartW = W - PAD.left - PAD.right
   const chartH = H - PAD.top - PAD.bottom
   const timePoints = [0, 4, 8, 12, 16, 20, 24]
@@ -129,28 +131,38 @@ function KMFigure({ result }) {
   const yScale = v => PAD.top + (1 - v) * chartH
 
   return (
-    <div>
-      <svg width="100%" viewBox={`0 0 ${W} ${H}`} xmlns="http://www.w3.org/2000/svg">
-        <line x1={PAD.left} y1={PAD.top} x2={PAD.left} y2={PAD.top + chartH} stroke="rgba(255,255,255,0.15)" strokeWidth="0.5" />
-        <line x1={PAD.left} y1={PAD.top + chartH} x2={PAD.left + chartW} y2={PAD.top + chartH} stroke="rgba(255,255,255,0.15)" strokeWidth="0.5" />
+    <div style={{ width: '100%', overflowX: 'auto' }}>
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} xmlns="http://www.w3.org/2000/svg" style={{ minWidth: 600, display: 'block' }}>
         {[0, 0.25, 0.5, 0.75, 1.0].map(v => (
           <g key={v}>
-            <line x1={PAD.left} y1={yScale(v)} x2={PAD.left + chartW} y2={yScale(v)} stroke="rgba(255,255,255,0.05)" strokeWidth="0.5" />
-            <text x={PAD.left - 6} y={yScale(v) + 4} fontSize="9" fill="rgba(255,255,255,0.4)" textAnchor="end">{Math.round(v * 100)}%</text>
+            <line x1={PAD.left} y1={yScale(v)} x2={PAD.left + chartW} y2={yScale(v)} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
+            <text x={PAD.left - 10} y={yScale(v) + 4} fontSize="11" fill="rgba(255,255,255,0.4)" textAnchor="end">{Math.round(v * 100)}%</text>
           </g>
         ))}
+        <line x1={PAD.left} y1={PAD.top} x2={PAD.left} y2={PAD.top + chartH} stroke="rgba(255,255,255,0.2)" strokeWidth="1" />
+        <line x1={PAD.left} y1={PAD.top + chartH} x2={PAD.left + chartW} y2={PAD.top + chartH} stroke="rgba(255,255,255,0.2)" strokeWidth="1" />
         {timePoints.map(t => (
-          <text key={t} x={xScale(t)} y={PAD.top + chartH + 16} fontSize="9" fill="rgba(255,255,255,0.4)" textAnchor="middle">{t}mo</text>
+          <g key={t}>
+            <line x1={xScale(t)} y1={PAD.top + chartH} x2={xScale(t)} y2={PAD.top + chartH + 6} stroke="rgba(255,255,255,0.2)" strokeWidth="1" />
+            <text x={xScale(t)} y={PAD.top + chartH + 20} fontSize="11" fill="rgba(255,255,255,0.4)" textAnchor="middle">{t} mo</text>
+          </g>
         ))}
+        <text x={PAD.left + chartW / 2} y={H - 4} fontSize="11" fill="rgba(255,255,255,0.3)" textAnchor="middle">Time (months)</text>
+        <text x={16} y={PAD.top + chartH / 2} fontSize="11" fill="rgba(255,255,255,0.3)" textAnchor="middle" transform={`rotate(-90, 16, ${PAD.top + chartH / 2})`}>Survival probability</text>
         {Object.entries(curves).map(([name, { points, color }]) => {
           const pts = points.map((v, i) => `${xScale(timePoints[i])},${yScale(v)}`).join(' ')
-          return <polyline key={name} points={pts} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          return (
+            <g key={name}>
+              <polyline points={pts} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+              <circle cx={xScale(timePoints[timePoints.length - 1])} cy={yScale(points[points.length - 1])} r="4" fill={color} />
+            </g>
+          )
         })}
       </svg>
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 8 }}>
+      <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginTop: 12, paddingLeft: PAD.left }}>
         {Object.entries(curves).map(([name, { color }]) => (
-          <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, opacity: 0.7 }}>
-            <div style={{ width: 12, height: 3, borderRadius: 2, background: color }} />
+          <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, opacity: 0.8 }}>
+            <div style={{ width: 20, height: 3, borderRadius: 2, background: color }} />
             {name}
           </div>
         ))}
@@ -159,23 +171,38 @@ function KMFigure({ result }) {
   )
 }
 
-function PastAnalyses({ username }) {
+// Receives session as a prop so it can filter by the current user
+function PastAnalyses() {
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
 
   useEffect(() => {
-    supabase
-      .from('csv_uploads')
-      .select('*')
-      .order('uploaded_at', { ascending: false })
-      .limit(20)
-      .then(({ data }) => {
-        setHistory(data || [])
+    supabase.auth.getUser().then(({ data, error: userError }) => {
+      if (userError || !data?.user) {
+        setError('Could not get current user.')
         setLoading(false)
-      })
+        return
+      }
+      supabase
+        .from('csv_uploads')
+        .select('*')
+        .eq('user_id', data.user.id)
+        .order('uploaded_at', { ascending: false })
+        .limit(20)
+        .then(({ data: rows, error: queryError }) => {
+          if (queryError) {
+            console.error('PastAnalyses query error:', queryError)
+            setError(queryError.message)
+          }
+          setHistory(rows || [])
+          setLoading(false)
+        })
+    })
   }, [])
 
   if (loading) return <p style={{ fontSize: 13, opacity: 0.5, padding: '1rem' }}>Loading history...</p>
+  if (error) return <p style={{ fontSize: 13, color: '#f87171', padding: '1rem' }}>Error: {error}</p>
   if (history.length === 0) return <p style={{ fontSize: 13, opacity: 0.5, padding: '1rem' }}>No past analyses yet.</p>
 
   return (
@@ -216,11 +243,12 @@ export default function Dashboard() {
   const [csvData, setCsvData] = useState(null)
   const [fileName, setFileName] = useState(null)
   const [rawFile, setRawFile] = useState(null)
+  const [detectedCols, setDetectedCols] = useState(null)
   const [loading, setLoading] = useState(false)
   const [loadingStep, setLoadingStep] = useState(0)
   const [result, setResult] = useState(null)
   const [csvError, setCsvError] = useState(null)
-  const [activeTab, setActiveTab] = useState('analysis') // 'analysis' | 'history'
+  const [activeTab, setActiveTab] = useState('analysis')
   const [trialInfo, setTrialInfo] = useState({
     name: 'Dupilumab Pediatric Asthma',
     indication: 'Moderate-to-severe asthma in children aged 2–11',
@@ -255,16 +283,17 @@ export default function Dashboard() {
     Papa.parse(file, {
       header: true,
       complete: ({ data }) => {
-        const columns = Object.keys(data[0] || {}).map(c => c.toLowerCase())
-        const missing = REQUIRED_COLUMNS.filter(r => !columns.includes(r))
-        if (missing.length > 0) {
-          setCsvError(`Missing required columns: ${missing.join(', ')}. Please check your CSV and re-upload.`)
+        const columns = Object.keys(data[0] || {})
+        const detected = detectColumns(columns)
+        if (detected.missing.length > 0) {
+          setCsvError(`Could not find required columns: ${detected.missing.join(', ')}. Found: ${columns.join(', ')}`)
           setCsvData(null)
           setFileName(null)
           setRawFile(null)
           return
         }
         setCsvData(data)
+        setDetectedCols(detected)
         setTrialInfo(t => ({ ...t, patients: data.length }))
       }
     })
@@ -276,6 +305,7 @@ export default function Dashboard() {
     setRawFile(null)
     setCsvError(null)
     setResult(null)
+    setDetectedCols(null)
   }
 
   function downloadRCode() {
@@ -296,7 +326,16 @@ export default function Dashboard() {
     try {
       const formData = new FormData()
       formData.append('file', rawFile)
-      const uploadRes = await fetch('http://localhost:3000/upload', { method: 'POST', body: formData })
+
+      // Pass the user's JWT so the backend can verify identity and store user_id
+      const uploadRes = await fetch('http://localhost:3000/upload', {
+        method: 'POST',
+        body: formData,
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      })
+
       const { job_id } = await uploadRes.json()
       let job = null
       while (true) {
@@ -330,14 +369,17 @@ export default function Dashboard() {
 
   const labelStyle = { fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.4, marginBottom: 6 }
   const tabStyle = (t) => ({
-    fontSize: 13, padding: '8px 20px', cursor: 'pointer', borderBottom: activeTab === t ? '2px solid #185FA5' : '2px solid transparent',
-    color: activeTab === t ? '#185FA5' : 'inherit', opacity: activeTab === t ? 1 : 0.5, background: 'none', border: 'none',
-    borderBottom: activeTab === t ? '2px solid #185FA5' : '2px solid transparent', fontWeight: activeTab === t ? 500 : 400
+    fontSize: 13, padding: '8px 20px', cursor: 'pointer',
+    color: activeTab === t ? '#185FA5' : 'inherit',
+    opacity: activeTab === t ? 1 : 0.5,
+    background: 'none',
+    border: 'none',
+    borderBottom: activeTab === t ? '2px solid #185FA5' : '2px solid transparent',
+    fontWeight: activeTab === t ? 500 : 400
   })
 
   return (
     <>
-      {/* Top bar */}
       <section id="center" style={{ padding: '2rem 3rem' }}>
         <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
           <div>
@@ -358,7 +400,6 @@ export default function Dashboard() {
         </div>
       </section>
 
-      {/* Trial context banner */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 0, borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)', padding: '1rem 3rem', background: 'rgba(255,255,255,0.02)' }}>
         {[{ label: 'Trial', value: trialInfo.name }, { label: 'Indication', value: trialInfo.indication }, { label: 'Status', value: trialInfo.status }, { label: 'Sponsor', value: trialInfo.sponsor }].map(({ label, value }) => (
           <div key={label} style={{ paddingRight: 24 }}>
@@ -368,7 +409,6 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* Tabs */}
       <div style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid var(--border)', padding: '0 3rem', gap: 4 }}>
         <button style={tabStyle('analysis')} onClick={() => setActiveTab('analysis')}>Analysis</button>
         <button style={tabStyle('history')} onClick={() => setActiveTab('history')}>Past Analyses</button>
@@ -376,15 +416,14 @@ export default function Dashboard() {
 
       <div className="ticks"></div>
 
-      {/* History Tab */}
       {activeTab === 'history' && (
         <div style={{ padding: '2rem 3rem' }}>
           <h2 style={{ fontSize: 18, fontWeight: 500, marginBottom: 20 }}>Past Analyses</h2>
+          {/* Pass session so the query is scoped to the current user */}
           <PastAnalyses />
         </div>
       )}
 
-      {/* Analysis Tab */}
       {activeTab === 'analysis' && (
         <>
           <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 0, borderTop: '1px solid var(--border)', minHeight: '60vh' }}>
@@ -405,7 +444,9 @@ export default function Dashboard() {
               {csvError && (
                 <div style={{ width: '100%', background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.2)', borderRadius: 8, padding: '10px 14px', textAlign: 'left' }}>
                   <p style={{ fontSize: 12, color: '#f87171', lineHeight: 1.6, margin: 0 }}>{csvError}</p>
-                  <p style={{ fontSize: 11, opacity: 0.6, marginTop: 6, color: '#f87171' }}>Required: {REQUIRED_COLUMNS.join(', ')}</p>
+                  <p style={{ fontSize: 11, opacity: 0.6, marginTop: 6, color: '#f87171' }}>
+                    Accepted — treatment: {TREATMENT_ALIASES.join(', ')} / outcome: {OUTCOME_ALIASES.join(', ')}
+                  </p>
                 </div>
               )}
 
@@ -468,7 +509,7 @@ export default function Dashboard() {
                     <p style={{ fontSize: 13, lineHeight: 1.6, margin: 0 }}>{result.confidenceIntervals || '—'}</p>
                   </Collapsible>
                   <Collapsible title="Demographics Table">
-                    <DemographicsTable csvData={csvData} />
+                    <DemographicsTable csvData={csvData} detectedCols={detectedCols} />
                   </Collapsible>
                   <Collapsible title="Efficacy Table">
                     <EfficacyTable result={result} />
@@ -506,9 +547,6 @@ export default function Dashboard() {
                   <div style={{ borderLeft: '2px solid #185FA5', paddingLeft: 16 }}>
                     <p style={{ fontSize: 13, lineHeight: 1.7, margin: 0 }}>{result.summary}</p>
                   </div>
-                  <Collapsible title="Kaplan-Meier Survival Curves">
-                    <KMFigure result={result} />
-                  </Collapsible>
                   {mode === 'statistician' && (
                     <p style={{ fontSize: 11, opacity: 0.4 }}>Switch to Medical Director mode for clean summary only.</p>
                   )}
@@ -517,6 +555,20 @@ export default function Dashboard() {
             </div>
 
           </section>
+
+          {/* KM Survival Curves — full-width row below the three columns */}
+          {result && (
+            <div style={{
+              borderTop: '1px solid var(--border)',
+              borderBottom: '1px solid var(--border)',
+              padding: '1.25rem 3rem',
+              background: 'rgba(255,255,255,0.01)',
+            }}>
+              <Collapsible title="Kaplan–Meier Survival Curves" defaultOpen>
+                <KMFigure result={result} />
+              </Collapsible>
+            </div>
+          )}
         </>
       )}
 

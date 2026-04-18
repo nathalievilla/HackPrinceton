@@ -30,7 +30,9 @@ function readCsvMetadata(csvPath) {
   }
 }
 
-async function runPipeline({ job_id, csvPath, jobDir, resultsPath, reportPath }) {
+// supabase is passed in from server.js (service role client).
+// It is optional — if not provided, the summary patch is skipped gracefully.
+async function runPipeline({ job_id, csvPath, jobDir, resultsPath, reportPath, supabase }) {
   // 1. Validate the upload
   const csvCheck = validators.validateUploadedCsv(csvPath);
   if (!csvCheck.ok) {
@@ -169,6 +171,19 @@ async function runPipeline({ job_id, csvPath, jobDir, resultsPath, reportPath })
   jobs.setArtifact(job_id, "report_path", reportPath);
 
   jobs.completeJob(job_id);
+
+  // 9. Patch the summary back into Supabase now that we have it.
+  // The row was already inserted in server.js with summary: null.
+  // This updates only the summary field — all other fields stay as-is.
+  if (supabase) {
+    const { error: patchError } = await supabase
+      .from("csv_uploads")
+      .update({ summary: summary.summary })
+      .eq("job_id", job_id);
+    if (patchError) {
+      console.error(`Supabase summary patch failed for job ${job_id}:`, patchError.message);
+    }
+  }
 }
 
 function syntheticROutput() {
