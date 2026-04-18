@@ -1,0 +1,18 @@
+{
+  "name": "hackprinceton-backend",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Minimal Express API for HackPrinceton (POST /analyze).",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  }
+}
