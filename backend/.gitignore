@@ -5,6 +5,7 @@ npm-debug.log*
 .env
 .env.local
 
-# runtime data
+# runtime data (per-job)
 uploads/
 results/
+runtime/
