@@ -1,12 +1,13 @@
 /**
- * Pipeline orchestration.
+ * Pipeline orchestration (HF Gemma two-agent flow).
  *
  * IMPORTANT (agent guardrail):
  *   - Stage names here MUST match the ones declared in jobs.js STAGES.
  *   - Each stage updates the job state via the jobs module so React polling
  *     sees consistent progress.
- *   - All AI calls go through llm.js. All R execution goes through runner.js.
- *     Do not bypass either.
+ *   - All AI calls go through agents.js (which uses hf.js). All R execution
+ *     goes through runner.js (called by agents.js). Do not bypass either.
+ *   - All Supabase writes go through db.js. Do not import the SDK here.
  *   - On any failure, call failStage and return; do NOT throw to the caller.
  */
 
@@ -14,26 +15,35 @@ const fs = require("fs");
 const path = require("path");
 
 const jobs = require("./jobs");
-const runner = require("./runner");
 const validators = require("./validators");
-const llm = require("./llm");
-
-const MAX_R_RETRIES = 1; // total attempts = MAX_R_RETRIES + 1
+const agents = require("./agents");
+const db = require("./db");
 
 function readCsvMetadata(csvPath) {
   try {
-    const sample = fs.readFileSync(csvPath, "utf8").split(/\r?\n/).slice(0, 5);
-    const header = (sample[0] || "").split(",").map((c) => c.trim());
-    return { columns: header, sample_rows: sample.slice(1).filter(Boolean) };
+    const raw = fs.readFileSync(csvPath, "utf8");
+    const lines = raw.split(/\r?\n/);
+    const header = (lines[0] || "").split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
+    const dataLines = lines.slice(1).filter(Boolean);
+    return {
+      columns: header,
+      sample_rows: dataLines.slice(0, 5),
+      row_count: dataLines.length,
+    };
   } catch (err) {
-    return { columns: [], sample_rows: [], read_error: err.message };
+    return { columns: [], sample_rows: [], row_count: 0, read_error: err.message };
   }
 }
 
+<<<<<<< Updated upstream
 // supabase is passed in from server.js (service role client).
 // It is optional — if not provided, the summary patch is skipped gracefully.
 async function runPipeline({ job_id, csvPath, jobDir, resultsPath, reportPath, supabase }) {
   // 1. Validate the upload
+=======
+async function runPipeline({ job_id, csvPath, jobDir, resultsPath, reportPath }) {
+  // Stage 0: validate the upload (already partially done in /upload, repeated for safety).
+>>>>>>> Stashed changes
   const csvCheck = validators.validateUploadedCsv(csvPath);
   if (!csvCheck.ok) {
     return jobs.failStage(job_id, "uploaded", {
@@ -43,133 +53,125 @@ async function runPipeline({ job_id, csvPath, jobDir, resultsPath, reportPath, s
   }
   const csvMeta = readCsvMetadata(csvPath);
 
-  // 2. AI proposes an analysis plan
-  jobs.startStage(job_id, "ai_plan_generated");
-  let plan;
+  // Persist the upload row in Supabase (no-op if Supabase not configured).
+  await db.saveCsvUpload({
+    job_id,
+    original_filename: path.basename(csvPath),
+    row_count: csvMeta.row_count,
+    columns: csvMeta.columns,
+  });
+
+  // ---------------- Agent 1: biostatistician ----------------
+  jobs.startStage(job_id, "agent1_planning");
+  let agent1;
   try {
-    plan = await llm.generateAnalysisPlan(csvMeta);
-    jobs.finishStage(job_id, "ai_plan_generated", {
-      message: `${plan.plan.length} step plan via ${plan.provider}`,
-    });
+    agent1 = await agents.runAgent1({ csvMeta, csvPath, jobDir });
   } catch (err) {
-    return jobs.failStage(job_id, "ai_plan_generated", { message: err.message });
+    return jobs.failStage(job_id, "agent1_planning", { message: err.message });
   }
 
-  // 3. AI generates R code (currently a baseline; replace via llm.js)
-  jobs.startStage(job_id, "r_code_generated");
-  let rCodeBundle;
-  try {
-    rCodeBundle = await llm.generateRCode(plan, csvMeta);
-    jobs.finishStage(job_id, "r_code_generated", {
-      message: `R code via ${rCodeBundle.provider}`,
-    });
-  } catch (err) {
-    return jobs.failStage(job_id, "r_code_generated", { message: err.message });
-  }
-
-  // 4. Execute R with bounded retries
-  jobs.startStage(job_id, "r_execution_done");
-  const runtime = runner.detectRRuntime();
-  let runResult = null;
-  if (runtime.available) {
-    let attempts = 0;
-    let lastError = null;
-    while (attempts <= MAX_R_RETRIES) {
-      attempts += 1;
-      runResult = await runner.runGeneratedRScript({
-        jobDir,
-        rCode: rCodeBundle.r_code,
-        csvPath,
-      });
-      if (runResult.execution.ok && runResult.output) break;
-      lastError = runResult.execution.error || runResult.parse_error || "r_failed";
-    }
-    if (!runResult || !runResult.execution.ok || !runResult.output) {
-      return jobs.failStage(job_id, "r_execution_done", {
-        message: `R execution failed after ${attempts} attempt(s): ${lastError}`,
-        details: runResult ? runResult.execution : null,
-      });
-    }
-    jobs.setArtifact(job_id, "r_script_path", runResult.script_path);
-    jobs.setArtifact(job_id, "r_output_path", runResult.output_path);
-    jobs.finishStage(job_id, "r_execution_done", {
-      message: `R run ok in ${runResult.execution.runtime_ms} ms`,
-    });
-  } else {
-    runResult = {
-      output: syntheticROutput(),
-      execution: {
-        ok: true,
-        exit_code: 0,
-        runtime_ms: 0,
-        timed_out: false,
-        error: null,
-        synthetic: true,
-        reason: runtime.reason || "Rscript unavailable",
-      },
-    };
-    jobs.finishStage(job_id, "r_execution_done", {
-      message: `synthetic output (R unavailable: ${runtime.reason || "unknown"})`,
+  if (!agent1.output) {
+    return jobs.failStage(job_id, "agent1_planning", {
+      message: "Agent 1 failed to produce a usable analysis output",
+      details: agent1.execution,
     });
   }
 
-  // 5. Validate R output
-  jobs.startStage(job_id, "qa_checks_done");
-  const outCheck = validators.validateRRunOutput(runResult.output);
+  jobs.setArtifact(job_id, "r_script_path", path.join(jobDir, "analyze.R"));
+  jobs.setArtifact(job_id, "r_output_path", path.join(jobDir, "output.json"));
+  jobs.finishStage(job_id, "agent1_planning", {
+    message: `Agent 1 ok via ${agent1.provider}${agent1.execution.synthetic ? " (synthetic R)" : ""}`,
+  });
+
+  // Persist Agent 1 separately for audit.
+  await db.saveAgent1Output(job_id, {
+    r_code: agent1.r_code,
+    output: agent1.output,
+    execution: agent1.execution,
+    provider: agent1.provider,
+    model: agent1.model,
+  });
+
+  // ---------------- QA: schema validation ----------------
+  jobs.startStage(job_id, "qa_validation");
+  const outCheck = validators.validateRRunOutput(agent1.output);
   if (!outCheck.ok) {
-    return jobs.failStage(job_id, "qa_checks_done", {
-      message: "R output failed schema validation",
+    return jobs.failStage(job_id, "qa_validation", {
+      message: "Agent 1 output failed schema validation",
       details: outCheck.errors,
     });
   }
-  jobs.finishStage(job_id, "qa_checks_done", {
+  jobs.finishStage(job_id, "qa_validation", {
     message: `${validators.REQUIRED_OUTPUT_KEYS.length} required keys present`,
   });
-
-  // 6. Generate plain-English summary
-  let summary;
-  try {
-    summary = await llm.generateSummary(runResult.output);
-  } catch (err) {
-    summary = { provider: "fallback", summary: `(summary unavailable: ${err.message})` };
-  }
 
   // Persist results JSON for GET /results/:job_id
   const resultsPayload = {
     job_id,
-    plan: plan.plan,
-    summary: summary.summary,
-    summary_provider: summary.provider,
-    execution: runResult.execution,
-    ...runResult.output,
+    summary: null,                       // filled in after Agent 2
+    summary_provider: null,
+    agent1_provider: agent1.provider,
+    agent1_model: agent1.model,
+    execution: agent1.execution,
+    ...agent1.output,
   };
   fs.writeFileSync(resultsPath, JSON.stringify(resultsPayload, null, 2));
 
-  // 7. Manager check
-  jobs.startStage(job_id, "manager_review_done");
-  let managerReview;
+  // ---------------- Agent 2: manager / QC ----------------
+  jobs.startStage(job_id, "agent2_review");
+  let agent2;
   try {
-    managerReview = await llm.managerCheck(runResult.output);
-    jobs.finishStage(job_id, "manager_review_done", {
-      message: `${managerReview.flags.length} flag(s) raised`,
-    });
+    agent2 = await agents.runAgent2(agent1.output);
   } catch (err) {
-    return jobs.failStage(job_id, "manager_review_done", { message: err.message });
+    return jobs.failStage(job_id, "agent2_review", { message: err.message });
   }
+  jobs.finishStage(job_id, "agent2_review", {
+    message: `Agent 2 ok via ${agent2.provider}; ${agent2.flags.length} flag(s)`,
+  });
 
-  // 8. Final report
+  await db.saveAgent2Output(job_id, {
+    clinically_reasonable: agent2.clinically_reasonable,
+    flags: agent2.flags,
+    summary: agent2.summary,
+    provider: agent2.provider,
+    model: agent2.model,
+  });
+
+  // Update results JSON with the final summary now that Agent 2 has run.
+  resultsPayload.summary = agent2.summary;
+  resultsPayload.summary_provider = agent2.provider;
+  fs.writeFileSync(resultsPath, JSON.stringify(resultsPayload, null, 2));
+
+  // ---------------- Final report ----------------
   const reportPayload = {
     job_id,
     generated_at: new Date().toISOString(),
-    headline: summary.summary,
-    summary_provider: summary.provider,
-    manager_check: managerReview,
-    plan: plan.plan,
+    headline: agent2.summary,
+    summary_provider: agent2.provider,
+    agent1: {
+      provider: agent1.provider,
+      model: agent1.model,
+      execution: agent1.execution,
+      used_fallback_reason: agent1.used_fallback_reason || null,
+    },
+    agent2: {
+      provider: agent2.provider,
+      model: agent2.model,
+      clinically_reasonable: agent2.clinically_reasonable,
+      flags: agent2.flags,
+      used_fallback_reason: agent2.used_fallback_reason || null,
+    },
+    manager_check: {
+      clinically_reasonable: agent2.clinically_reasonable,
+      flags: agent2.flags,
+      notes: "Automated review only. Statistician sign-off required before clinical decisions.",
+    },
     results: resultsPayload,
   };
   fs.writeFileSync(reportPath, JSON.stringify(reportPayload, null, 2));
   jobs.setArtifact(job_id, "report_path", reportPath);
 
+<<<<<<< Updated upstream
   jobs.completeJob(job_id);
 
   // 9. Patch the summary back into Supabase now that we have it.
@@ -185,31 +187,12 @@ async function runPipeline({ job_id, csvPath, jobDir, resultsPath, reportPath, s
     }
   }
 }
+=======
+  await db.saveReport(job_id, reportPayload);
+>>>>>>> Stashed changes
 
-function syntheticROutput() {
-  return {
-    meta: { synthetic: true },
-    shap: {
-      features: ["eosinophils", "age", "prior_hospitalizations", "fev1"],
-      importance: [0.42, 0.21, 0.18, 0.09],
-    },
-    survival: {
-      time_points: [0, 4, 8, 12, 16, 20, 24],
-      curves: {
-        overall: [1.0, 0.95, 0.9, 0.82, 0.78, 0.74, 0.7],
-        high_eosinophil: [1.0, 0.98, 0.96, 0.93, 0.9, 0.88, 0.85],
-        low_eosinophil: [1.0, 0.93, 0.85, 0.76, 0.68, 0.6, 0.55],
-      },
-    },
-    subgroups: [
-      {
-        name: "High eosinophil + prior hospitalizations",
-        size: 87,
-        response_rate: 0.78,
-        baseline_rate: 0.42,
-      },
-    ],
-  };
+  jobs.completeJob(job_id);
+  await db.upsertJob(jobs.getJob(job_id));
 }
 
 module.exports = {

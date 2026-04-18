@@ -13,13 +13,17 @@
 
 const crypto = require("crypto");
 
+// Stages reflect the HF Gemma two-agent pipeline:
+//   uploaded         -> CSV validated and saved
+//   agent1_planning  -> Gemma biostatistician produces R code AND R is executed
+//   qa_validation    -> R output schema check
+//   agent2_review    -> Gemma manager produces QC + summary
+//   completed        -> final report persisted
 const STAGES = Object.freeze([
   "uploaded",
-  "ai_plan_generated",
-  "r_code_generated",
-  "r_execution_done",
-  "qa_checks_done",
-  "manager_review_done",
+  "agent1_planning",
+  "qa_validation",
+  "agent2_review",
   "completed",
 ]);
 

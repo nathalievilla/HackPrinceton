@@ -6,8 +6,8 @@
  *     and output capture rules apply uniformly.
  *   - Generated R code is written under the per-job runtime dir; never run R
  *     code from arbitrary paths or via shell strings.
- *   - The adapter falls back to a synthetic result when R is unavailable or
- *     USE_R=false, so the React demo keeps working without R installed.
+ *   - The adapter falls back gracefully when R is unavailable so the demo
+ *     keeps working without R installed (callers handle synthetic results).
  */
 
 const { spawn, spawnSync } = require("child_process");
@@ -40,8 +40,7 @@ function detectRRuntime() {
 
 /**
  * Spawn Rscript on `scriptPath` with the given args. Captures stdout/stderr
- * and enforces a hard timeout. Returns a structured result that callers can
- * use for retry decisions.
+ * and enforces a hard timeout. Always resolves with a structured result.
  */
 function runRScript(scriptPath, args = [], { cwd, timeoutMs } = {}) {
   return new Promise((resolve) => {
@@ -100,7 +99,7 @@ function runRScript(scriptPath, args = [], { cwd, timeoutMs } = {}) {
 }
 
 /**
- * Convenience: write `rCode` to <jobDir>/analyze.R and execute it with
+ * Write `rCode` to <jobDir>/analyze.R and execute it with
  * (csvPath, outputJsonPath) as arguments. Reads the JSON the script writes
  * and returns it together with execution metadata.
  */
