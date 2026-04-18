@@ -11,8 +11,7 @@
 const fs = require("fs");
 const path = require("path");
 
-const REQUIRED_OUTPUT_KEYS = ["shap", "survival", "subgroups"];
-
+const REQUIRED_OUTPUT_KEYS = ["shap", "survival", "subgroups", "demographics", "efficacy", "data_cleaning"];
 function validateUploadedCsv(filePath) {
   const errors = [];
   if (!fs.existsSync(filePath)) {
