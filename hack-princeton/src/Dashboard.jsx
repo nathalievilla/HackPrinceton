@@ -1,6 +1,25 @@
-import './App.css'
+import { useEffect, useState } from 'react'
+import { supabase } from './lib/supabaseClient'
+import Auth from './Auth'
 
 export default function Dashboard() {
+  const [session, setSession] = useState(undefined) // undefined = loading
+
+  useEffect(() => {
+  supabase.auth.getSession().then(({ data }) => {
+    setSession(data.session ?? null)  // explicitly set null if no session
+  })
+
+  const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+    setSession(session ?? null)
+  })
+
+  return () => listener.subscription.unsubscribe()
+  }, [])
+
+  if (session === undefined) return <p style={{ padding: '2rem' }}>Loading...</p>
+  if (!session) return <Auth onAuth={() => {}} />
+
   return (
     <>
       <section id="center">
