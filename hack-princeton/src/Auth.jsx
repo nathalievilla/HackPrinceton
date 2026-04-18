@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { supabase } from './lib/supabaseClient'
 
 export default function Auth({ onAuth }) {
-  const [mode, setMode] = useState('login') // 'login' | 'signup'
+  const [mode, setMode] = useState('login')
   const [form, setForm] = useState({ firstName: '', lastName: '', username: '', password: '' })
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -14,35 +14,54 @@ export default function Auth({ onAuth }) {
   async function handleSubmit() {
     setError(null)
     setLoading(true)
-
-    // Supabase uses email under the hood — we use username@app.local as a fake email
-    const fakeEmail = `${form.username}@gmail.com`
+    const username = form.username.toLowerCase().trim()
 
     if (mode === 'signup') {
-      const { error: signUpError } = await supabase.auth.signUp({
-        email: fakeEmail,
-        password: form.password,
-        options: {
-          data: {
-            first_name: form.firstName,
-            last_name: form.lastName,
-            username: form.username,
-          }
-        }
-      })
-      if (signUpError) { setError(signUpError.message); setLoading(false); return }
+      // Check if username already taken
+      const { data: existing } = await supabase
+        .from('users')
+        .select('id')
+        .eq('username', username)
+        .single()
+
+      if (existing) {
+        setError('Username already taken.')
+        setLoading(false)
+        return
+      }
+
+      const { error: insertError } = await supabase
+        .from('users')
+        .insert({
+          first_name: form.firstName.trim(),
+          last_name: form.lastName.trim(),
+          username,
+          password: form.password, // plain text for hackathon — fine for now
+        })
+
+      if (insertError) { setError(insertError.message); setLoading(false); return }
+
+      onAuth({ username, firstName: form.firstName.trim() })
     }
 
     if (mode === 'login') {
-      const { error: signInError } = await supabase.auth.signInWithPassword({
-        email: fakeEmail,
-        password: form.password,
-      })
-      if (signInError) { setError(signInError.message); setLoading(false); return }
+      const { data: user, error: fetchError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('username', username)
+        .eq('password', form.password)
+        .single()
+
+      if (fetchError || !user) {
+        setError('Invalid username or password.')
+        setLoading(false)
+        return
+      }
+
+      onAuth({ username: user.username, firstName: user.first_name })
     }
 
     setLoading(false)
-    onAuth()
   }
 
   return (

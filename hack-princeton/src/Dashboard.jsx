@@ -18,7 +18,7 @@ export default function Dashboard() {
   }, [])
 
   if (session === undefined) return <p style={{ padding: '2rem' }}>Loading...</p>
-  if (!session) return <Auth onAuth={() => {}} />
+  if (!session) return <Auth onAuth={(user) => setSession(user)} />
 
   return (
     <>
