@@ -3,9 +3,6 @@ import { supabase } from './lib/supabaseClient'
 import Auth from './Auth'
 import Papa from 'papaparse'
 
-<<<<<<< Updated upstream
-const REQUIRED_COLUMNS = ['age', 'treatment_arm', 'outcome']
-=======
 const TREATMENT_ALIASES = ['trt', 'treatment_group', 'treatment', 'arm', 'treatment_arm']
 const OUTCOME_ALIASES = ['label', 'outcome', 'response', 'event', 'status', 'adverse_events', 'dropout']
 const AGE_ALIASES = ['age']
@@ -17,7 +14,6 @@ function detectColumns(columns) {
   const age = AGE_ALIASES.find(a => lower.includes(a))
   return { treatment, outcome, age, missing: [!age && 'age', !treatment && 'treatment column', !outcome && 'outcome column'].filter(Boolean) }
 }
->>>>>>> Stashed changes
 
 const LOADING_STEPS = [
   'Reading your dataset...',
@@ -255,10 +251,7 @@ export default function Dashboard() {
     setCsvError(null)
     setResult(null)
     setFileName(file.name)
-<<<<<<< Updated upstream
-=======
     setRawFile(file)
->>>>>>> Stashed changes
     Papa.parse(file, {
       header: true,
       complete: ({ data }) => {
@@ -268,10 +261,7 @@ export default function Dashboard() {
           setCsvError(`Missing required columns: ${missing.join(', ')}. Please check your CSV and re-upload.`)
           setCsvData(null)
           setFileName(null)
-<<<<<<< Updated upstream
-=======
           setRawFile(null)
->>>>>>> Stashed changes
           return
         }
         setCsvData(data)
@@ -279,8 +269,6 @@ export default function Dashboard() {
       }
     })
   }
-<<<<<<< Updated upstream
-=======
 
   function resetUpload() {
     setCsvData(null)
@@ -289,7 +277,6 @@ export default function Dashboard() {
     setCsvError(null)
     setResult(null)
   }
->>>>>>> Stashed changes
 
   function downloadRCode() {
     if (!result?.rCode) return
@@ -303,55 +290,6 @@ export default function Dashboard() {
   }
 
   async function runAnalysis() {
-<<<<<<< Updated upstream
-    if (!csvData) return
-    setLoading(true)
-    setResult(null)
-
-    const schema = Object.keys(csvData[0]).join(', ')
-    const sample = csvData.slice(0, 5)
-
-    try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 1000,
-          messages: [{
-            role: 'user',
-            content: `You are an expert biostatistician analyzing clinical trial data.
-
-CSV columns: ${schema}
-Sample rows: ${JSON.stringify(sample, null, 2)}
-
-Return a JSON object with exactly these fields:
-{
-  "summary": "2-3 sentence plain English summary for a medical director. No jargon.",
-  "rCode": "Complete R code to analyze this dataset with XGBoost, SHAP, and Kaplan-Meier survival analysis",
-  "pvalues": "Key p-values and what they mean, as a short string",
-  "confidenceIntervals": "Key confidence intervals as a short string",
-  "subgroup": "The most important subgroup finding in one sentence"
-}
-
-Return ONLY valid JSON, no markdown, no explanation.`
-          }]
-        })
-      })
-
-      const data = await response.json()
-      const text = data.content.map(b => b.text || '').join('')
-      const clean = text.replace(/```json|```/g, '').trim()
-      const parsed = JSON.parse(clean)
-      setResult(parsed)
-    } catch (err) {
-      setResult({
-        summary: 'Analysis failed. Please try again.',
-        rCode: '', pvalues: '', confidenceIntervals: '', subgroup: ''
-      })
-    }
-
-=======
     if (!csvData || !rawFile) return
     setLoading(true)
     setResult(null)
@@ -384,7 +322,6 @@ Return ONLY valid JSON, no markdown, no explanation.`
     } catch (err) {
       setResult({ summary: 'Analysis failed. Please try again.', rCode: '', pvalues: '', confidenceIntervals: '', subgroup: '' })
     }
->>>>>>> Stashed changes
     setLoading(false)
   }
 
