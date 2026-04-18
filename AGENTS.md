@@ -40,15 +40,36 @@ Backend lives in [`backend/server.js`](backend/server.js). Routes:
 | GET    | `/results/:job_id`  | analysis JSON + summary                    |
 | GET    | `/report/:job_id`   | final report (analysis + manager check)    |
 
-Deprecated but currently supported (used by older clients):
+Temporary compatibility (slated for removal in a future team PR):
 
-- `GET /results?job_id=...`
-- `POST /interpret`
+- `GET /results?job_id=...` -> same payload as `GET /results/:job_id`. Sets `X-Deprecated`.
+
+Removed (do not re-add without a new design):
+
+- `POST /interpret` -> superseded by the `summary` field on `GET /results/:job_id`
+  and by the planned `POST /agent2` (Gemma manager + summary).
 
 Rules for changing routes:
 
 - Renaming or removing any route above requires (a) coordinating with the frontend owner of [`hack-princeton/`](hack-princeton/) so the React client is updated in the same PR, (b) updating this file, (c) keeping the old route as a deprecated shim for at least one PR.
 - Adding new routes is free as long as it does not change behavior of the routes above.
+
+### Backlog: planned endpoints (NOT implemented; do not stub silently)
+
+These are owned by the team's next-iteration plan. An agent must not invent
+behavior for them without explicit sign-off, and must update this file in the
+same PR if it implements one.
+
+| Method | Path             | Purpose                                                           |
+| ------ | ---------------- | ----------------------------------------------------------------- |
+| POST   | `/agent1`        | CSV -> Gemma biostatistician agent -> R code -> exec -> output     |
+| POST   | `/agent2`        | Agent 1 output -> Gemma manager agent -> QC + plain-English summary |
+| POST   | `/upload` (v2)   | Adds required-column validation + Supabase persistence             |
+| GET    | `/results` (v2)  | Fetches past analyses from Supabase                                |
+| GET    | `/trial-context` | TREKIDS metadata for the React app                                 |
+
+When implemented, store Agent 1 output, Agent 2 output, and the generated R
+code as **separate** Supabase rows (auditability requirement).
 
 ## 3. Job state schema (DO NOT rename fields)
 

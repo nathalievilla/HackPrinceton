@@ -104,12 +104,36 @@ Returns the final report:
 }
 ```
 
-### Deprecated (still works)
+### Temporary compatibility
 
-- `GET /results?job_id=...`
-- `POST /interpret`
+- `GET /results?job_id=...` -> same as `GET /results/:job_id`. Sets an
+  `X-Deprecated` response header. Will be removed in a future PR once all
+  callers use the canonical async endpoints above.
 
-These set an `X-Deprecated` response header.
+`POST /interpret` has been **removed**. Plain-English summary now ships
+inside `GET /results/:job_id` (`summary` field) and `GET /report/:job_id`.
+
+## Backend status (current vs planned)
+
+What works today:
+
+- Async pipeline: `POST /upload` -> `GET /jobs/:job_id` polling ->
+  `GET /results/:job_id` and `GET /report/:job_id`.
+- R subprocess execution via `child_process` with hard timeouts; synthetic
+  fallback when `Rscript` is unavailable.
+- Two-pass AI scaffold (`generateSummary` + `managerCheck`) running in
+  deterministic fallback mode by default.
+
+Planned (NOT implemented yet — owned by team backlog):
+
+- `POST /agent1` -> Gemma biostatistician agent: CSV in -> R code -> exec.
+- `POST /agent2` -> Gemma manager agent: QC check + plain-English summary.
+- `POST /upload` enhancement: required-column CSV validation +
+  Supabase persistence.
+- `GET /results` (Supabase): historical analyses for past job_ids.
+- `GET /trial-context`: TREKIDS metadata to display in the app.
+- Persist Agent 1 output, Agent 2 output, and generated R code as
+  separate Supabase rows so each is auditable.
 
 ## Curl smoke test
 

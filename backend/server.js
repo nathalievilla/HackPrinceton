@@ -13,9 +13,15 @@
  *       GET  /results/:job_id        -> R analysis + summary
  *       GET  /report/:job_id         -> final report incl. manager check
  *
- *   - Back-compat (deprecated, will be removed once frontend migrates):
+ *   - Temporary compatibility (slated for removal in a future team PR):
  *       GET  /results?job_id=...     -> same as /results/:job_id
- *       POST /interpret              -> wraps llm.generateSummary
+ *
+ *   - Future endpoints (NOT implemented yet, see ../AGENTS.md backlog):
+ *       POST /agent1                 -> CSV -> Gemma biostatistician -> R code -> exec
+ *       POST /agent2                 -> Agent1 output -> Gemma manager QC + summary
+ *       POST /upload (enhanced)      -> column validation + Supabase persistence
+ *       GET  /results (Supabase)     -> historical analyses
+ *       GET  /trial-context          -> TREKIDS metadata
  */
 
 require("dotenv").config();
@@ -159,7 +165,11 @@ app.get("/report/:job_id", (req, res) => {
   }
 });
 
-// ---------- back-compat (deprecated) ----------
+// ---------- temporary compatibility ----------
+// TODO(team): remove `GET /results?job_id=...` once all clients use the
+// canonical async endpoints (`/upload`, `/jobs/:job_id`, `/results/:job_id`,
+// `/report/:job_id`). This shim exists only to avoid breaking older callers
+// during the React wiring phase. Track removal in the next backend PR.
 
 app.get("/results", (req, res) => {
   const job_id = req.query.job_id;
@@ -179,20 +189,10 @@ app.get("/results", (req, res) => {
   }
 });
 
-app.post("/interpret", async (req, res) => {
-  try {
-    const results = req.body;
-    if (!results || typeof results !== "object") {
-      return res.status(400).json({ error: "expected results JSON in body" });
-    }
-    const summary = await llm.generateSummary(results);
-    res.set("X-Deprecated", "use GET /report/:job_id (manager check included)");
-    res.json({ interpretation: summary.summary, provider: summary.provider });
-  } catch (err) {
-    console.error("POST /interpret failed:", err);
-    res.status(500).json({ error: "internal_error" });
-  }
-});
+// NOTE: `POST /interpret` was removed. Plain-English summary is now part of
+// `GET /results/:job_id` (`summary` field) and `GET /report/:job_id`.
+// Future replacement: `POST /agent2` (Gemma manager QC + summary). See
+// ../AGENTS.md backlog.
 
 app.use((_req, res) => {
   res.status(404).json({ error: "not_found" });
