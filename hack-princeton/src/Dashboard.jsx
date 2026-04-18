@@ -3,7 +3,7 @@ import { supabase } from './lib/supabaseClient'
 import Auth from './Auth'
 import Papa from 'papaparse'
 
-const REQUIRED_COLUMNS = ['age', 'trt', 'label']
+const REQUIRED_COLUMNS = ['age', 'treatment_arm', 'outcome']
 
 const LOADING_STEPS = [
   'Reading your dataset...',
@@ -24,13 +24,12 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(false)
   const [loadingStep, setLoadingStep] = useState(0)
   const [result, setResult] = useState(null)
-  const [rawFile, setRawFile] = useState(null)
   const [csvError, setCsvError] = useState(null)
   const [trialInfo, setTrialInfo] = useState({
-    name: 'ACTG 175',
-    indication: 'HIV infection in adults with CD4 counts 200–500',
-    status: 'Phase 3 — Completed',
-    sponsor: 'NIH / NIAID',
+    name: 'Dupilumab Pediatric Asthma',
+    indication: 'Moderate-to-severe asthma in children aged 2–11',
+    status: 'Phase 3 — Active',
+    sponsor: 'Regeneron / Sanofi',
     patients: null,
   })
 
@@ -51,30 +50,28 @@ export default function Dashboard() {
 
   function handleLogout() { setSession(null) }
 
-function handleUpload(e) {
-  const file = e.target.files[0]
-  if (!file) return
-  setCsvError(null)
-  setResult(null)
-  setFileName(file.name)
-  setRawFile(file)   // ADD THIS
-  Papa.parse(file, {
-    header: true,
-    complete: ({ data }) => {
-      const columns = Object.keys(data[0] || {}).map(c => c.toLowerCase())
-      const missing = REQUIRED_COLUMNS.filter(r => !columns.includes(r))
-      if (missing.length > 0) {
-        setCsvError(`Missing required columns: ${missing.join(', ')}. Please check your CSV and re-upload.`)
-        setCsvData(null)
-        setFileName(null)
-        setRawFile(null)
-        return
+  function handleUpload(e) {
+    const file = e.target.files[0]
+    if (!file) return
+    setCsvError(null)
+    setResult(null)
+    setFileName(file.name)
+    Papa.parse(file, {
+      header: true,
+      complete: ({ data }) => {
+        const columns = Object.keys(data[0] || {}).map(c => c.toLowerCase())
+        const missing = REQUIRED_COLUMNS.filter(r => !columns.includes(r))
+        if (missing.length > 0) {
+          setCsvError(`Missing required columns: ${missing.join(', ')}. Please check your CSV and re-upload.`)
+          setCsvData(null)
+          setFileName(null)
+          return
+        }
+        setCsvData(data)
+        setTrialInfo(t => ({ ...t, patients: data.length }))
       }
-      setCsvData(data)
-      setTrialInfo(t => ({ ...t, patients: data.length }))
-    }
-  })
-}
+    })
+  }
 
   function downloadRCode() {
     if (!result?.rCode) return
@@ -88,51 +85,52 @@ function handleUpload(e) {
   }
 
   async function runAnalysis() {
-  if (!csvData || !rawFile) return
-  setLoading(true)
-  setResult(null)
+    if (!csvData) return
+    setLoading(true)
+    setResult(null)
 
-  try {
-    // 1. Upload CSV to backend
-    const formData = new FormData()
-    formData.append('file', rawFile)
+    const schema = Object.keys(csvData[0]).join(', ')
+    const sample = csvData.slice(0, 5)
 
-    const uploadRes = await fetch('http://localhost:3000/upload', {
-      method: 'POST',
-      body: formData
-    })
-    const { job_id } = await uploadRes.json()
+    try {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1000,
+          messages: [{
+            role: 'user',
+            content: `You are an expert biostatistician analyzing clinical trial data.
 
-    // 2. Poll until job is complete
-    let job = null
-    while (true) {
-      await new Promise(r => setTimeout(r, 1500))
-      const pollRes = await fetch(`http://localhost:3000/jobs/${job_id}`)
-      job = await pollRes.json()
-      if (job.status === 'completed' || job.status === 'failed') break
+CSV columns: ${schema}
+Sample rows: ${JSON.stringify(sample, null, 2)}
+
+Return a JSON object with exactly these fields:
+{
+  "summary": "2-3 sentence plain English summary for a medical director. No jargon.",
+  "rCode": "Complete R code to analyze this dataset with XGBoost, SHAP, and Kaplan-Meier survival analysis",
+  "pvalues": "Key p-values and what they mean, as a short string",
+  "confidenceIntervals": "Key confidence intervals as a short string",
+  "subgroup": "The most important subgroup finding in one sentence"
+}
+
+Return ONLY valid JSON, no markdown, no explanation.`
+          }]
+        })
+      })
+
+      const data = await response.json()
+      const text = data.content.map(b => b.text || '').join('')
+      const clean = text.replace(/```json|```/g, '').trim()
+      const parsed = JSON.parse(clean)
+      setResult(parsed)
+    } catch (err) {
+      setResult({
+        summary: 'Analysis failed. Please try again.',
+        rCode: '', pvalues: '', confidenceIntervals: '', subgroup: ''
+      })
     }
-
-    if (job.status === 'failed') {
-      setResult({ summary: `Analysis failed: ${job.error?.message}`, rCode: '', pvalues: '', confidenceIntervals: '', subgroup: '' })
-      setLoading(false)
-      return
-    }
-
-    // 3. Fetch final report
-    const reportRes = await fetch(`http://localhost:3000/report/${job_id}`)
-    const report = await reportRes.json()
-
-    setResult({
-      summary: report.headline,
-      rCode: report.results?.rCode || '',
-      pvalues: report.results?.pvalues || '',
-      confidenceIntervals: report.results?.confidenceIntervals || '',
-      subgroup: report.results?.subgroup || report.headline
-    })
-
-   } catch (err) {
-    setResult({ summary: 'Analysis failed. Please try again.', rCode: '', pvalues: '', confidenceIntervals: '', subgroup: '' })
-  }
 
     setLoading(false)
   }
