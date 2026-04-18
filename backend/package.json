@@ -2,7 +2,7 @@
   "name": "hackprinceton-backend",
   "version": "0.0.1",
   "private": true,
-  "description": "Minimal Express API for HackPrinceton (POST /analyze).",
+  "description": "Express API for HackPrinceton: CSV upload -> R analysis -> Gemini interpretation.",
   "type": "commonjs",
   "main": "server.js",
   "scripts": {
@@ -13,6 +13,12 @@
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "express": "^4.19.2"
-  }
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1"
+  },
+  "devDependencies": {},
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
 }
