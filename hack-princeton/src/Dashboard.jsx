@@ -50,7 +50,48 @@ function Collapsible({ title, children, defaultOpen = false }) {
   )
 }
 
-function DemographicsTable({ csvData, detectedCols }) {
+function DemographicsTable({ csvData, detectedCols, result }) {
+  // Use backend demographics data if available, otherwise compute from CSV
+  if (result && result.demographics) {
+    const demo = result.demographics
+    if (demo.arms && Array.isArray(demo.arms)) {
+      return (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: 'left', padding: '8px 12px', borderBottom: '1px solid var(--border)', opacity: 0.5, fontWeight: 500 }}>Characteristic</th>
+                {demo.arms.map(arm => (
+                  <th key={arm.name} style={{ textAlign: 'right', padding: '8px 12px', borderBottom: '1px solid var(--border)', opacity: 0.5, fontWeight: 500 }}>
+                    {arm.name} (n={arm.n})
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              <tr style={{ background: 'rgba(255,255,255,0.01)' }}>
+                <td style={{ padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>Age (years)</td>
+                {demo.arms.map(arm => (
+                  <td key={arm.name} style={{ textAlign: 'right', padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                    {arm.age_mean?.toFixed(1) || '—'} ± {arm.age_sd?.toFixed(1) || '—'}
+                  </td>
+                ))}
+              </tr>
+              {demo.baseline_characteristics && (
+                <tr>
+                  <td colSpan={demo.arms.length + 1} style={{ padding: '8px 12px', fontSize: 11, opacity: 0.6, fontStyle: 'italic' }}>
+                    {demo.baseline_characteristics}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )
+    }
+  }
+  
+  // Fallback to CSV-computed demographics
   if (!csvData || csvData.length === 0) return <p style={{ fontSize: 13, opacity: 0.5 }}>No data loaded.</p>
   const trtCol = Object.keys(csvData[0]).find(k => TREATMENT_ALIASES.includes(k.toLowerCase())) || 'trt'
   const arms = [...new Set(csvData.map(r => r[trtCol]))]
@@ -97,11 +138,26 @@ function DemographicsTable({ csvData, detectedCols }) {
 
 function EfficacyTable({ result }) {
   if (!result) return <p style={{ fontSize: 13, opacity: 0.5 }}>Run analysis to see efficacy data.</p>
-  const rows = [
-    { label: 'Primary endpoint p-value', value: result.pvalues || '—' },
-    { label: 'Confidence intervals', value: result.confidenceIntervals || '—' },
-    { label: 'Key subgroup finding', value: result.subgroup || '—' },
-  ]
+  
+  // Use real efficacy data from backend if available
+  let rows
+  if (result.efficacy) {
+    rows = [
+      { label: 'Primary endpoint p-value', value: result.efficacy.p_value ? `p = ${result.efficacy.p_value}` : result.pvalues || '—' },
+      { label: 'Confidence intervals', value: result.efficacy.confidence_interval || result.confidenceIntervals || '—' },
+      { label: 'Odds ratio', value: result.efficacy.odds_ratio ? `OR = ${result.efficacy.odds_ratio}` : '—' },
+      { label: 'Treatment effect', value: result.efficacy.treatment_rate && result.efficacy.control_rate ? 
+        `${(result.efficacy.treatment_rate * 100).toFixed(1)}% vs ${(result.efficacy.control_rate * 100).toFixed(1)}%` : '—' },
+      { label: 'Key subgroup finding', value: result.subgroup || '—' },
+    ]
+  } else {
+    // Fallback to original structure
+    rows = [
+      { label: 'Primary endpoint p-value', value: result.pvalues || '—' },
+      { label: 'Confidence intervals', value: result.confidenceIntervals || '—' },
+      { label: 'Key subgroup finding', value: result.subgroup || '—' },
+    ]
+  }
   return (
     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
       <tbody>
@@ -121,11 +177,33 @@ function KMFigure({ result }) {
   const W = 900, H = 340, PAD = { top: 24, right: 32, bottom: 48, left: 52 }
   const chartW = W - PAD.left - PAD.right
   const chartH = H - PAD.top - PAD.bottom
-  const timePoints = [0, 4, 8, 12, 16, 20, 24]
-  const curves = {
-    'Overall': { points: [1.0, 0.95, 0.9, 0.82, 0.78, 0.74, 0.7], color: '#185FA5' },
-    'High responders': { points: [1.0, 0.98, 0.96, 0.93, 0.9, 0.88, 0.85], color: '#1D9E75' },
-    'Low responders': { points: [1.0, 0.93, 0.85, 0.76, 0.68, 0.6, 0.55], color: '#D85A30' },
+  
+  // Use real survival data from backend if available, otherwise fallback to synthetic data
+  let timePoints, curves
+  if (result.survival && result.survival.time_points && result.survival.curves) {
+    timePoints = result.survival.time_points
+    const backendCurves = result.survival.curves
+    
+    // Map backend curve data to frontend format with colors
+    curves = {}
+    const colors = ['#185FA5', '#1D9E75', '#D85A30', '#F59E0B', '#8B5CF6']
+    let colorIndex = 0
+    
+    Object.keys(backendCurves).forEach(curveName => {
+      curves[curveName] = {
+        points: backendCurves[curveName],
+        color: colors[colorIndex % colors.length]
+      }
+      colorIndex++
+    })
+  } else {
+    // Fallback to hardcoded data if backend doesn't provide survival curves
+    timePoints = [0, 4, 8, 12, 16, 20, 24]
+    curves = {
+      'Overall': { points: [1.0, 0.95, 0.9, 0.82, 0.78, 0.74, 0.7], color: '#185FA5' },
+      'High responders': { points: [1.0, 0.98, 0.96, 0.93, 0.9, 0.88, 0.85], color: '#1D9E75' },
+      'Low responders': { points: [1.0, 0.93, 0.85, 0.76, 0.68, 0.6, 0.55], color: '#D85A30' },
+    }
   }
   const xScale = t => PAD.left + (t / 24) * chartW
   const yScale = v => PAD.top + (1 - v) * chartH
@@ -255,10 +333,10 @@ export default function Dashboard() {
   const [csvError, setCsvError] = useState(null)
   const [activeTab, setActiveTab] = useState('analysis')
   const [trialInfo, setTrialInfo] = useState({
-    name: 'Dupilumab Pediatric Asthma',
-    indication: 'Moderate-to-severe asthma in children aged 2–11',
-    status: 'Phase 3 — Active',
-    sponsor: 'Regeneron / Sanofi',
+    name: 'Clinical Trial Analysis',
+    indication: 'Data-driven indication discovery',
+    status: 'Analysis — Ready',
+    sponsor: 'AI-Powered Research',
     patients: null,
   })
 
@@ -277,6 +355,54 @@ export default function Dashboard() {
   }, [loading])
 
   function handleLogout() { setSession(null) }
+
+  function updateTrialInfoFromData(data, fileName) {
+    if (!data || data.length === 0) return
+    
+    const columns = Object.keys(data[0] || {})
+    const sampleSize = data.length
+    
+    // Try to infer trial type from columns
+    let indication = 'Unknown indication'
+    let trialPhase = 'Analysis'
+    
+    // Look for disease-specific columns to infer indication
+    const diseaseKeywords = {
+      'cancer': ['tumor', 'cancer', 'oncology', 'chemo', 'radiation'],
+      'cardiovascular': ['cardiac', 'heart', 'blood_pressure', 'cholesterol', 'cvd'],
+      'respiratory': ['asthma', 'copd', 'lung', 'respiratory', 'breathing'],
+      'diabetes': ['glucose', 'diabetes', 'insulin', 'hba1c', 'blood_sugar'],
+      'immunology': ['immune', 'arthritis', 'inflammation', 'cytokine'],
+    }
+    
+    for (const [disease, keywords] of Object.entries(diseaseKeywords)) {
+      if (keywords.some(keyword => columns.some(col => col.toLowerCase().includes(keyword)))) {
+        indication = disease.charAt(0).toUpperCase() + disease.slice(1) + ' study'
+        break
+      }
+    }
+    
+    // Infer sponsor from filename or use generic
+    let sponsor = 'Research Organization'
+    if (fileName) {
+      if (fileName.toLowerCase().includes('aids') || fileName.toLowerCase().includes('hiv')) {
+        sponsor = 'ACTG / NIH'
+        indication = 'HIV/AIDS treatment'
+      } else if (fileName.toLowerCase().includes('dupilumab')) {
+        sponsor = 'Regeneron / Sanofi'
+        indication = 'Atopic dermatitis / Asthma'
+      }
+    }
+    
+    setTrialInfo(prev => ({
+      ...prev,
+      name: fileName ? fileName.replace(/\.(csv|xlsx?)$/i, '').replace(/[-_]/g, ' ') : prev.name,
+      indication: indication,
+      sponsor: sponsor,
+      patients: sampleSize,
+      status: `${trialPhase} — ${sampleSize} patients`,
+    }))
+  }
 
   function handleUpload(e) {
     const file = e.target.files[0]
@@ -299,7 +425,7 @@ export default function Dashboard() {
         }
         setCsvData(data)
         setDetectedCols(detected)
-        setTrialInfo(t => ({ ...t, patients: data.length }))
+        updateTrialInfoFromData(data, file.name)
       }
     })
   }
@@ -348,12 +474,24 @@ export default function Dashboard() {
         if (errorData.error === 'csv_analysis_failed') {
           setResult({ 
             summary: `CSV analysis failed: ${errorData.details?.map(d => d.message).join('; ') || 'Unknown error'}`, 
-            rCode: '', pvalues: '', confidenceIntervals: '', subgroup: '' 
+            rCode: '', 
+            pvalues: '', 
+            confidenceIntervals: '', 
+            subgroup: '',
+            demographics: null,
+            efficacy: null,
+            survival: null
           })
         } else {
           setResult({ 
             summary: `Upload failed: ${errorData.error || 'Unknown error'}. ${errorData.details ? JSON.stringify(errorData.details) : ''}`, 
-            rCode: '', pvalues: '', confidenceIntervals: '', subgroup: '' 
+            rCode: '', 
+            pvalues: '', 
+            confidenceIntervals: '', 
+            subgroup: '',
+            demographics: null,
+            efficacy: null,
+            survival: null
           })
         }
         setLoading(false)
@@ -369,21 +507,48 @@ export default function Dashboard() {
         if (job.status === 'completed' || job.status === 'failed') break
       }
       if (job.status === 'failed') {
-        setResult({ summary: `Analysis failed: ${job.error?.message}`, rCode: '', pvalues: '', confidenceIntervals: '', subgroup: '' })
+        setResult({ 
+          summary: `Analysis failed: ${job.error?.message}`, 
+          rCode: '', 
+          pvalues: '', 
+          confidenceIntervals: '', 
+          subgroup: '',
+          demographics: null,
+          efficacy: null,
+          survival: null
+        })
         setLoading(false)
         return
       }
       const reportRes = await fetch(`http://localhost:3000/report/${job_id}`)
       const report = await reportRes.json()
+      
+      // Extract real data from the backend analysis results
+      const analysisResults = report.results || {}
+      
       setResult({
         summary: report.headline,
-        rCode: report.results?.rCode || '',
-        pvalues: report.results?.pvalues || '',
-        confidenceIntervals: report.results?.confidenceIntervals || '',
-        subgroup: report.results?.subgroup || report.headline
+        rCode: analysisResults.rCode || '',
+        pvalues: analysisResults.pvalues || '',
+        confidenceIntervals: analysisResults.confidenceIntervals || '',
+        subgroup: analysisResults.subgroup || report.headline,
+        demographics: analysisResults.demographics || null,
+        efficacy: analysisResults.efficacy || null,
+        survival: analysisResults.survival || null,
+        shap: analysisResults.shap || null,
+        subgroups: analysisResults.subgroups || null
       })
     } catch (err) {
-      setResult({ summary: 'Analysis failed. Please try again.', rCode: '', pvalues: '', confidenceIntervals: '', subgroup: '' })
+      setResult({ 
+        summary: 'Analysis failed. Please try again.', 
+        rCode: '', 
+        pvalues: '', 
+        confidenceIntervals: '', 
+        subgroup: '',
+        demographics: null,
+        efficacy: null,
+        survival: null
+      })
     }
     setLoading(false)
   }
@@ -533,7 +698,7 @@ export default function Dashboard() {
                     <p style={{ fontSize: 13, lineHeight: 1.6, margin: 0 }}>{result.confidenceIntervals || '—'}</p>
                   </Collapsible>
                   <Collapsible title="Demographics Table">
-                    <DemographicsTable csvData={csvData} detectedCols={detectedCols} />
+                    <DemographicsTable csvData={csvData} detectedCols={detectedCols} result={result} />
                   </Collapsible>
                   <Collapsible title="Efficacy Table">
                     <EfficacyTable result={result} />
