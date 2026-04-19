@@ -50,24 +50,6 @@ function Collapsible({ title, children, defaultOpen = false }) {
   )
 }
 
-function StatisticalSummary({ result }) {
-  if (!result) return <p style={{ fontSize: 13, opacity: 0.5 }}>Run analysis to see statistical output.</p>
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 16px' }}>
-          <p style={{ fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.4, margin: '0 0 6px' }}>P-value</p>
-          <p style={{ fontSize: 15, fontWeight: 500, margin: 0 }}>{result.pvalues || '—'}</p>
-        </div>
-        <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 16px' }}>
-          <p style={{ fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.4, margin: '0 0 6px' }}>Confidence interval</p>
-          <p style={{ fontSize: 15, fontWeight: 500, margin: 0 }}>{result.confidenceIntervals || '—'}</p>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 function DemographicsTable({ csvData, detectedCols }) {
   if (!csvData || csvData.length === 0) return <p style={{ fontSize: 13, opacity: 0.5 }}>No data loaded.</p>
   const trtCol = Object.keys(csvData[0]).find(k => TREATMENT_ALIASES.includes(k.toLowerCase())) || 'trt'
@@ -189,18 +171,23 @@ function KMFigure({ result }) {
   )
 }
 
+// Receives session as a prop so it can filter by the current user
 function PastAnalyses() {
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
   useEffect(() => {
+    // Use backend API endpoint instead of direct Supabase call
     fetch('http://localhost:3000/results')
       .then(response => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        }
         return response.json()
       })
       .then(data => {
+        // Map backend data structure to frontend expectations
         const mappedRows = (data.rows || []).map(row => ({
           id: row.job_id,
           original_filename: row.uploaded_file?.name || 'Unknown file',
@@ -344,21 +331,35 @@ export default function Dashboard() {
     try {
       const formData = new FormData()
       formData.append('file', rawFile)
+
+      // Pass the user's JWT so the backend can verify identity and store user_id
       const uploadRes = await fetch('http://localhost:3000/upload', {
         method: 'POST',
         body: formData,
-        headers: { Authorization: `Bearer ${session.access_token}` },
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
       })
+
       if (!uploadRes.ok) {
         const errorData = await uploadRes.json()
+        console.error('Upload failed:', errorData)
+        
         if (errorData.error === 'csv_analysis_failed') {
-          setResult({ summary: `CSV analysis failed: ${errorData.details?.map(d => d.message).join('; ') || 'Unknown error'}`, rCode: '', pvalues: '', confidenceIntervals: '', subgroup: '' })
+          setResult({ 
+            summary: `CSV analysis failed: ${errorData.details?.map(d => d.message).join('; ') || 'Unknown error'}`, 
+            rCode: '', pvalues: '', confidenceIntervals: '', subgroup: '' 
+          })
         } else {
-          setResult({ summary: `Upload failed: ${errorData.error || 'Unknown error'}. ${errorData.details ? JSON.stringify(errorData.details) : ''}`, rCode: '', pvalues: '', confidenceIntervals: '', subgroup: '' })
+          setResult({ 
+            summary: `Upload failed: ${errorData.error || 'Unknown error'}. ${errorData.details ? JSON.stringify(errorData.details) : ''}`, 
+            rCode: '', pvalues: '', confidenceIntervals: '', subgroup: '' 
+          })
         }
         setLoading(false)
         return
       }
+
       const { job_id } = await uploadRes.json()
       let job = null
       while (true) {
@@ -395,7 +396,8 @@ export default function Dashboard() {
     fontSize: 13, padding: '8px 20px', cursor: 'pointer',
     color: activeTab === t ? '#185FA5' : 'inherit',
     opacity: activeTab === t ? 1 : 0.5,
-    background: 'none', border: 'none',
+    background: 'none',
+    border: 'none',
     borderBottom: activeTab === t ? '2px solid #185FA5' : '2px solid transparent',
     fontWeight: activeTab === t ? 500 : 400
   })
@@ -441,19 +443,20 @@ export default function Dashboard() {
       {activeTab === 'history' && (
         <div style={{ padding: '2rem 3rem' }}>
           <h2 style={{ fontSize: 18, fontWeight: 500, marginBottom: 20 }}>Past Analyses</h2>
+          {/* Pass session so the query is scoped to the current user */}
           <PastAnalyses />
         </div>
       )}
 
       {activeTab === 'analysis' && (
         <>
-          {/* Three column upload / key finding / AI interpretation row */}
-          <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 0, borderTop: '1px solid var(--border)', minHeight: '40vh' }}>
+          <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 0, borderTop: '1px solid var(--border)', minHeight: '60vh' }}>
 
             {/* Upload Panel */}
             <div style={{ padding: '2.5rem 2rem', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: 16 }}>
               <h2 style={{ fontSize: 18, fontWeight: 500, letterSpacing: '-0.2px' }}>Upload</h2>
               <p style={{ fontSize: 13, opacity: 0.6, lineHeight: 1.6 }}>Upload a clinical trial CSV to begin analysis.</p>
+
               <label style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, border: csvError ? '1px dashed #f87171' : '1px dashed var(--border)', borderRadius: 10, padding: '2rem 1.5rem', cursor: 'pointer', width: '100%', fontSize: 13, opacity: 0.8 }}>
                 <svg width="28" height="28" fill="none" stroke={csvError ? '#f87171' : 'currentColor'} strokeWidth="1.5" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
@@ -461,6 +464,7 @@ export default function Dashboard() {
                 {fileName ? `✓ ${fileName}` : 'Choose CSV file'}
                 <input type="file" accept=".csv" onChange={handleUpload} style={{ display: 'none' }} />
               </label>
+
               {csvError && (
                 <div style={{ width: '100%', background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.2)', borderRadius: 8, padding: '10px 14px', textAlign: 'left' }}>
                   <p style={{ fontSize: 12, color: '#f87171', lineHeight: 1.6, margin: 0 }}>{csvError}</p>
@@ -469,12 +473,16 @@ export default function Dashboard() {
                   </p>
                 </div>
               )}
+
               {csvData && !csvError && (
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, width: '100%' }}>
                   <p style={{ fontSize: 12, opacity: 0.5 }}>{csvData.length} rows loaded</p>
-                  <button onClick={resetUpload} style={{ fontSize: 12, padding: '5px 14px', opacity: 0.6, width: '100%' }}>Upload a different file</button>
+                  <button onClick={resetUpload} style={{ fontSize: 12, padding: '5px 14px', opacity: 0.6, width: '100%' }}>
+                    Upload a different file
+                  </button>
                 </div>
               )}
+
               {loading && (
                 <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <div style={{ width: '100%', height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
@@ -483,79 +491,20 @@ export default function Dashboard() {
                   <p style={{ fontSize: 12, opacity: 0.5, textAlign: 'center' }}>{LOADING_STEPS[loadingStep]}</p>
                 </div>
               )}
+
               <button onClick={runAnalysis} disabled={!csvData || loading || !!csvError}
                 style={{ fontSize: 13, padding: '10px 24px', width: '100%', justifyContent: 'center', marginTop: 'auto' }}>
                 {loading ? 'Analyzing...' : 'Run Analysis'}
               </button>
             </div>
 
-            {/* Statistical Summary Panel — p-value and CI always visible, key finding below */}
-            <div style={{ padding: '2.5rem 2rem', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <h2 style={{ fontSize: 18, fontWeight: 500, letterSpacing: '-0.2px' }}>
-                {mode === 'statistician' ? 'Statistical Summary' : 'Key Finding'}
-              </h2>
-              {!result && !loading && <p style={{ fontSize: 13, opacity: 0.5 }}>Upload a CSV and run analysis to see results.</p>}
-              {loading && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%' }}>
-                  {[80, 60, 90].map((w, i) => (
-                    <div key={i} style={{ height: 12, borderRadius: 4, background: 'rgba(255,255,255,0.06)', width: `${w}%`, animation: 'pulse 1.5s ease infinite' }} />
-                  ))}
-                  <style>{`@keyframes pulse { 0%,100%{opacity:.4} 50%{opacity:.9} }`}</style>
-                </div>
-              )}
-              {result && mode === 'statistician' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                    <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px' }}>
-                      <p style={{ fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.4, margin: '0 0 6px' }}>P-value</p>
-                      <p style={{ fontSize: 15, fontWeight: 500, margin: 0 }}>{result.pvalues || '—'}</p>
-                    </div>
-                    <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px' }}>
-                      <p style={{ fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.4, margin: '0 0 6px' }}>95% CI</p>
-                      <p style={{ fontSize: 15, fontWeight: 500, margin: 0 }}>{result.confidenceIntervals || '—'}</p>
-                    </div>
-                  </div>
-                  <div style={{ borderLeft: '2px solid var(--border)', paddingLeft: 12, marginTop: 4 }}>
-                    <p style={{ fontSize: 13, lineHeight: 1.7, margin: 0, opacity: 0.8 }}>{result.subgroup}</p>
-                  </div>
-                </div>
-              )}
-              {result && mode === 'medical' && (
-                <div style={{ fontSize: 13, lineHeight: 1.7, opacity: 0.85, flex: 1, display: 'flex', alignItems: 'center' }}>
-                  <p style={{ margin: 0 }}>{result.subgroup}</p>
-                </div>
-              )}
-            </div>
-
-            {/* AI Interpretation Panel */}
-            <div style={{ padding: '2.5rem 2rem', display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <h2 style={{ fontSize: 18, fontWeight: 500, letterSpacing: '-0.2px' }}>AI Interpretation</h2>
-              {!result && !loading && <p style={{ fontSize: 13, opacity: 0.5 }}>AI interpretation will appear here.</p>}
-              {loading && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  {[95, 70, 85].map((w, i) => (
-                    <div key={i} style={{ height: 12, borderRadius: 4, background: 'rgba(255,255,255,0.06)', width: `${w}%`, animation: 'pulse 1.5s ease infinite', animationDelay: `${i * 0.2}s` }} />
-                  ))}
-                </div>
-              )}
-              {result && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  <div style={{ borderLeft: '2px solid #185FA5', paddingLeft: 16 }}>
-                    <p style={{ fontSize: 13, lineHeight: 1.7, margin: 0 }}>{result.summary}</p>
-                  </div>
-                </div>
-              )}
-            </div>
-          </section>
-
-          {/* Full-width results section — only shown after analysis, only in statistician mode */}
-          {result && mode === 'statistician' && (
-            <div style={{ borderTop: '1px solid var(--border)', padding: '2rem 3rem', display: 'flex', flexDirection: 'column', gap: 16 }}>
-
-              {/* Header row with download button */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <h2 style={{ fontSize: 18, fontWeight: 500, margin: 0 }}>Statistical Output</h2>
-                {result.rCode && (
+            {/* Stats Panel */}
+            <div style={{ padding: '2.5rem 2rem', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center', textAlign: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                <h2 style={{ fontSize: 18, fontWeight: 500, letterSpacing: '-0.2px' }}>
+                  {mode === 'statistician' ? 'Statistical Output' : 'Key Finding'}
+                </h2>
+                {result && mode === 'statistician' && result.rCode && (
                   <button onClick={downloadRCode} style={{ fontSize: 12, padding: '5px 12px', display: 'flex', alignItems: 'center', gap: 6 }}>
                     <svg width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
@@ -565,35 +514,80 @@ export default function Dashboard() {
                 )}
               </div>
 
-              {/* 1. Survival Curves — always first */}
-              <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '16px 18px' }}>
-                <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 16px' }}>Kaplan–Meier Survival Curves</p>
-                <KMFigure result={result} />
-              </div>
+              {!result && !loading && <p style={{ fontSize: 13, opacity: 0.5 }}>Upload a CSV and run analysis to see results.</p>}
+              {loading && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%' }}>
+                  {[80, 60, 90].map((w, i) => (
+                    <div key={i} style={{ height: 12, borderRadius: 4, background: 'rgba(255,255,255,0.06)', width: `${w}%`, animation: 'pulse 1.5s ease infinite' }} />
+                  ))}
+                  <style>{`@keyframes pulse { 0%,100%{opacity:.4} 50%{opacity:.9} }`}</style>
+                </div>
+              )}
 
-              {/* 2. Efficacy Table — collapsible, open by default */}
-              <Collapsible title="Efficacy Table" defaultOpen>
-                <EfficacyTable result={result} />
-              </Collapsible>
+              {result && mode === 'statistician' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 16, width: '100%', textAlign: 'left' }}>
+                  <Collapsible title="P-values" defaultOpen>
+                    <p style={{ fontSize: 13, lineHeight: 1.6, margin: 0 }}>{result.pvalues || '—'}</p>
+                  </Collapsible>
+                  <Collapsible title="Confidence Intervals" defaultOpen>
+                    <p style={{ fontSize: 13, lineHeight: 1.6, margin: 0 }}>{result.confidenceIntervals || '—'}</p>
+                  </Collapsible>
+                  <Collapsible title="Demographics Table">
+                    <DemographicsTable csvData={csvData} detectedCols={detectedCols} />
+                  </Collapsible>
+                  <Collapsible title="Efficacy Table">
+                    <EfficacyTable result={result} />
+                  </Collapsible>
+                  <Collapsible title="Generated R Code">
+                    <pre style={{ background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: 12, fontSize: 11, overflowX: 'auto', whiteSpace: 'pre-wrap', maxHeight: 280, overflowY: 'auto', lineHeight: 1.6, fontFamily: 'monospace', margin: 0 }}>
+                      {result.rCode || '—'}
+                    </pre>
+                  </Collapsible>
+                </div>
+              )}
 
-              {/* 3. Demographics Table — collapsible, closed by default */}
-              <Collapsible title="Demographics Table" defaultOpen={false}>
-                <DemographicsTable csvData={csvData} detectedCols={detectedCols} />
-              </Collapsible>
-
-              {/* 4. Generated R Code — collapsible, closed by default */}
-              <Collapsible title="Generated R Code" defaultOpen={false}>
-                <pre style={{ background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: 12, fontSize: 11, overflowX: 'auto', whiteSpace: 'pre-wrap', maxHeight: 280, overflowY: 'auto', lineHeight: 1.6, fontFamily: 'monospace', margin: 0 }}>
-                  {result.rCode || '—'}
-                </pre>
-              </Collapsible>
-
+              {result && mode === 'medical' && (
+                <div style={{ fontSize: 13, lineHeight: 1.7, opacity: 0.85, textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1 }}>
+                  {result.subgroup}
+                </div>
+              )}
             </div>
-          )}
 
-          {/* KM curves in medical director mode — kept below the three columns */}
-          {result && mode === 'medical' && (
-            <div style={{ borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)', padding: '1.25rem 3rem', background: 'rgba(255,255,255,0.01)' }}>
+            {/* AI Output Panel */}
+            <div style={{ padding: '2.5rem 2rem', display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <h2 style={{ fontSize: 18, fontWeight: 500, letterSpacing: '-0.2px' }}>AI Interpretation</h2>
+
+              {!result && !loading && <p style={{ fontSize: 13, opacity: 0.5 }}>AI interpretation will appear here.</p>}
+              {loading && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {[95, 70, 85].map((w, i) => (
+                    <div key={i} style={{ height: 12, borderRadius: 4, background: 'rgba(255,255,255,0.06)', width: `${w}%`, animation: 'pulse 1.5s ease infinite', animationDelay: `${i * 0.2}s` }} />
+                  ))}
+                </div>
+              )}
+
+              {result && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ borderLeft: '2px solid #185FA5', paddingLeft: 16 }}>
+                    <p style={{ fontSize: 13, lineHeight: 1.7, margin: 0 }}>{result.summary}</p>
+                  </div>
+                  {mode === 'statistician' && (
+                    <p style={{ fontSize: 11, opacity: 0.4 }}>Switch to Medical Director mode for clean summary only.</p>
+                  )}
+                </div>
+              )}
+            </div>
+
+          </section>
+
+          {/* KM Survival Curves — full-width row below the three columns */}
+          {result && (
+            <div style={{
+              borderTop: '1px solid var(--border)',
+              borderBottom: '1px solid var(--border)',
+              padding: '1.25rem 3rem',
+              background: 'rgba(255,255,255,0.01)',
+            }}>
               <Collapsible title="Kaplan–Meier Survival Curves" defaultOpen>
                 <KMFigure result={result} />
               </Collapsible>
