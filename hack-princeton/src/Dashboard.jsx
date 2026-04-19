@@ -544,7 +544,7 @@ function StatisticianReport({ result, csvData, detectedCols }) {
         </section>
 
         <section id="rcode" style={sectionStyle}>
-          <h2 style={headingStyle}>Generated R Code</h2>
+          <h2 style={{ ...headingStyle, textAlign: 'left' }}>Generated R Code</h2>
           <pre style={{
             background: 'rgba(255,255,255,0.05)',
             borderRadius: 8,
@@ -557,6 +557,7 @@ function StatisticianReport({ result, csvData, detectedCols }) {
             lineHeight: 1.6,
             fontFamily: 'monospace',
             margin: 0,
+            textAlign: 'left',
           }}>
             {result.rCode || '— no R code returned (fallback path)'}
           </pre>
@@ -722,48 +723,219 @@ export default function Dashboard() {
     if (!data || data.length === 0) return
     
     const columns = Object.keys(data[0] || {})
+    const lowerColumns = columns.map(c => c.toLowerCase())
     const sampleSize = data.length
     
-    // Try to infer trial type from columns
-    let indication = 'Unknown indication'
-    let trialPhase = 'Analysis'
+    // Extract direct trial metadata from CSV columns if available
+    const trialMetadata = extractTrialMetadata(data[0], columns)
     
-    // Look for disease-specific columns to infer indication
+    // Try to infer trial type from columns and data
+    let indication = trialMetadata.indication || inferIndication(columns, data)
+    let trialPhase = trialMetadata.phase || inferTrialPhase(columns, data)
+    let sponsor = trialMetadata.sponsor || inferSponsor(fileName, columns, data)
+    let trialName = trialMetadata.name || inferTrialName(fileName, columns, data)
+    
+    // Extract timeline information
+    const timelineInfo = extractTimelineInfo(data, columns)
+    
+    setTrialInfo(prev => ({
+      ...prev,
+      name: trialName,
+      indication: indication,
+      sponsor: sponsor,
+      patients: sampleSize,
+      status: `${trialPhase} — ${sampleSize} patients${timelineInfo ? ` • ${timelineInfo}` : ''}`,
+    }))
+  }
+
+  // Extract direct metadata from CSV if columns exist
+  function extractTrialMetadata(firstRow, columns) {
+    const metadata = {}
+    const lowerColumns = columns.map(c => c.toLowerCase())
+    
+    // Look for direct trial metadata columns
+    const metadataFields = {
+      name: ['study_name', 'trial_name', 'study_title', 'protocol_title', 'trial_id'],
+      indication: ['indication', 'disease', 'condition', 'diagnosis', 'therapeutic_area'],
+      sponsor: ['sponsor', 'company', 'organization', 'pharmaceutical_company'],
+      phase: ['phase', 'study_phase', 'trial_phase']
+    }
+    
+    Object.entries(metadataFields).forEach(([field, aliases]) => {
+      const matchingCol = aliases.find(alias => lowerColumns.includes(alias))
+      if (matchingCol && firstRow[columns[lowerColumns.indexOf(matchingCol)]]) {
+        metadata[field] = firstRow[columns[lowerColumns.indexOf(matchingCol)]]
+      }
+    })
+    
+    return metadata
+  }
+
+  function inferIndication(columns, data) {
+    // Enhanced disease-specific keyword detection
     const diseaseKeywords = {
-      'cancer': ['tumor', 'cancer', 'oncology', 'chemo', 'radiation'],
-      'cardiovascular': ['cardiac', 'heart', 'blood_pressure', 'cholesterol', 'cvd'],
-      'respiratory': ['asthma', 'copd', 'lung', 'respiratory', 'breathing'],
-      'diabetes': ['glucose', 'diabetes', 'insulin', 'hba1c', 'blood_sugar'],
-      'immunology': ['immune', 'arthritis', 'inflammation', 'cytokine'],
+      'Oncology': ['tumor', 'cancer', 'oncology', 'chemo', 'chemotherapy', 'radiation', 'metastasis', 'malignant', 'carcinoma', 'lymphoma', 'leukemia', 'progression_free', 'overall_survival'],
+      'Cardiovascular': ['cardiac', 'heart', 'blood_pressure', 'cholesterol', 'cvd', 'hypertension', 'myocardial', 'coronary', 'stroke', 'ejection_fraction'],
+      'Respiratory': ['asthma', 'copd', 'lung', 'respiratory', 'breathing', 'pulmonary', 'spirometry', 'fev1', 'oxygen'],
+      'Diabetes/Endocrinology': ['glucose', 'diabetes', 'insulin', 'hba1c', 'blood_sugar', 'glycemic', 'endocrine', 'metabolic'],
+      'Immunology/Rheumatology': ['immune', 'arthritis', 'inflammation', 'cytokine', 'autoimmune', 'rheumatoid', 'lupus', 'crp', 'esr'],
+      'Neurology': ['neurological', 'seizure', 'epilepsy', 'alzheimer', 'parkinson', 'dementia', 'cognitive', 'brain'],
+      'Infectious Disease': ['infection', 'viral', 'bacterial', 'antibiotic', 'antiviral', 'hiv', 'aids', 'hepatitis'],
+      'Dermatology': ['skin', 'dermatology', 'eczema', 'psoriasis', 'dermatitis', 'rash', 'lesion']
     }
     
     for (const [disease, keywords] of Object.entries(diseaseKeywords)) {
       if (keywords.some(keyword => columns.some(col => col.toLowerCase().includes(keyword)))) {
-        indication = disease.charAt(0).toUpperCase() + disease.slice(1) + ' study'
-        break
+        return disease
       }
     }
     
-    // Infer sponsor from filename or use generic
-    let sponsor = 'Research Organization'
+    // Check data values for additional clues
+    if (data.length > 0) {
+      const sampleRow = data[0]
+      for (const [disease, keywords] of Object.entries(diseaseKeywords)) {
+        if (keywords.some(keyword => 
+          Object.values(sampleRow).some(value => 
+            String(value).toLowerCase().includes(keyword)
+          )
+        )) {
+          return disease
+        }
+      }
+    }
+    
+    return 'Clinical Research Study'
+  }
+
+  function inferTrialPhase(columns, data) {
+    const lowerColumns = columns.map(c => c.toLowerCase())
+    
+    // Look for explicit phase information
+    const phaseCol = lowerColumns.find(col => 
+      col.includes('phase') || col.includes('study_phase')
+    )
+    
+    if (phaseCol && data.length > 0) {
+      const phaseValue = data[0][columns[lowerColumns.indexOf(phaseCol)]]
+      if (phaseValue) return `Phase ${phaseValue}`
+    }
+    
+    // Infer phase from study characteristics
+    if (data.length < 50) return 'Phase I'
+    if (data.length < 200) return 'Phase II'
+    if (data.length >= 300) return 'Phase III'
+    
+    return 'Phase II'
+  }
+
+  function inferSponsor(fileName, columns, data) {
+    const lowerColumns = columns.map(c => c.toLowerCase())
+    
+    // Check for sponsor in data
+    const sponsorCol = lowerColumns.find(col => 
+      col.includes('sponsor') || col.includes('company')
+    )
+    
+    if (sponsorCol && data.length > 0) {
+      const sponsorValue = data[0][columns[lowerColumns.indexOf(sponsorCol)]]
+      if (sponsorValue) return sponsorValue
+    }
+    
+    // Infer from filename patterns
     if (fileName) {
-      if (fileName.toLowerCase().includes('aids') || fileName.toLowerCase().includes('hiv')) {
-        sponsor = 'ACTG / NIH'
-        indication = 'HIV/AIDS treatment'
-      } else if (fileName.toLowerCase().includes('dupilumab')) {
-        sponsor = 'Regeneron / Sanofi'
-        indication = 'Atopic dermatitis / Asthma'
+      const fn = fileName.toLowerCase()
+      const sponsors = {
+        'pfizer': 'Pfizer Inc.',
+        'novartis': 'Novartis AG',
+        'roche': 'F. Hoffmann-La Roche',
+        'merck': 'Merck & Co.',
+        'gsk': 'GlaxoSmithKline',
+        'sanofi': 'Sanofi',
+        'regeneron': 'Regeneron Pharmaceuticals',
+        'gilead': 'Gilead Sciences',
+        'biogen': 'Biogen Inc.',
+        'amgen': 'Amgen Inc.',
+        'nih': 'National Institutes of Health',
+        'actg': 'AIDS Clinical Trials Group'
+      }
+      
+      for (const [key, sponsor] of Object.entries(sponsors)) {
+        if (fn.includes(key)) return sponsor
       }
     }
     
-    setTrialInfo(prev => ({
-      ...prev,
-      name: fileName ? fileName.replace(/\.(csv|xlsx?)$/i, '').replace(/[-_]/g, ' ') : prev.name,
-      indication: indication,
-      sponsor: sponsor,
-      patients: sampleSize,
-      status: `${trialPhase} — ${sampleSize} patients`,
-    }))
+    // Check for academic vs industry patterns
+    const hasAcademicMarkers = lowerColumns.some(col => 
+      col.includes('site_id') || col.includes('center') || col.includes('investigator')
+    )
+    
+    if (hasAcademicMarkers && data.length > 500) {
+      return 'Multi-Center Academic Consortium'
+    }
+    
+    return 'Clinical Research Organization'
+  }
+
+  function inferTrialName(fileName, columns, data) {
+    const lowerColumns = columns.map(c => c.toLowerCase())
+    
+    // Check for trial name/ID in data
+    const nameCol = lowerColumns.find(col => 
+      col.includes('study_name') || col.includes('trial_name') || col.includes('protocol')
+    )
+    
+    if (nameCol && data.length > 0) {
+      const nameValue = data[0][columns[lowerColumns.indexOf(nameCol)]]
+      if (nameValue) return nameValue
+    }
+    
+    // Generate from filename
+    if (fileName) {
+      let name = fileName.replace(/\.(csv|xlsx?)$/i, '').replace(/[-_]/g, ' ')
+      
+      // Capitalize words properly
+      name = name.replace(/\b\w+/g, word => 
+        word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+      )
+      
+      // Add "Study" if not present
+      if (!name.toLowerCase().includes('study') && !name.toLowerCase().includes('trial')) {
+        name += ' Study'
+      }
+      
+      return name
+    }
+    
+    return 'Clinical Trial Analysis'
+  }
+
+  function extractTimelineInfo(data, columns) {
+    const lowerColumns = columns.map(c => c.toLowerCase())
+    
+    // Look for date columns
+    const dateColumns = lowerColumns.filter(col => 
+      col.includes('date') || col.includes('enrollment') || col.includes('visit')
+    )
+    
+    if (dateColumns.length > 0) {
+      const dateCol = columns[lowerColumns.indexOf(dateColumns[0])]
+      const dates = data
+        .map(row => new Date(row[dateCol]))
+        .filter(date => !isNaN(date))
+        .sort()
+      
+      if (dates.length > 0) {
+        const startDate = dates[0]
+        const endDate = dates[dates.length - 1]
+        const duration = Math.round((endDate - startDate) / (1000 * 60 * 60 * 24 * 30))
+        
+        if (duration > 0) {
+          return `${duration} month${duration === 1 ? '' : 's'} enrollment`
+        }
+      }
+    }
+    
+    return null
   }
 
   function handleUpload(e) {
@@ -961,14 +1133,16 @@ export default function Dashboard() {
         </div>
       </section>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 0, borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)', padding: '1rem 3rem', background: 'rgba(255,255,255,0.02)' }}>
-        {[{ label: 'Trial', value: trialInfo.name }, { label: 'Indication', value: trialInfo.indication }, { label: 'Status', value: trialInfo.status }, { label: 'Sponsor', value: trialInfo.sponsor }].map(({ label, value }) => (
-          <div key={label} style={{ paddingRight: 24 }}>
-            <p style={labelStyle}>{label}</p>
-            <p style={{ fontSize: 13, lineHeight: 1.4 }}>{value}</p>
-          </div>
-        ))}
-      </div>
+      {csvData && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 0, borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)', padding: '1rem 3rem', background: 'rgba(255,255,255,0.02)' }}>
+          {[{ label: 'Trial', value: trialInfo.name }, { label: 'Indication', value: trialInfo.indication }, { label: 'Status', value: trialInfo.status }, { label: 'Sponsor', value: trialInfo.sponsor }].map(({ label, value }) => (
+            <div key={label} style={{ paddingRight: 24 }}>
+              <p style={labelStyle}>{label}</p>
+              <p style={{ fontSize: 13, lineHeight: 1.4 }}>{value}</p>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid var(--border)', padding: '0 3rem', gap: 4 }}>
         <button style={tabStyle('analysis')} onClick={() => setActiveTab('analysis')}>Analysis</button>
@@ -1131,7 +1305,7 @@ export default function Dashboard() {
               })()}
 
               {result && mode === 'medical' && (
-                <div style={{ fontSize: 13, lineHeight: 1.7, opacity: 0.85, textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1 }}>
+                <div style={{ fontSize: 13, lineHeight: 1.7, opacity: 0.85, textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, padding: '0 1rem' }}>
                   {result.subgroup}
                 </div>
               )}
