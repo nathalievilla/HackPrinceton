@@ -1242,19 +1242,9 @@ export default function Dashboard() {
 
             {/* Stats Panel */}
             <div style={{ padding: '2.5rem 2rem', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center', textAlign: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                <h2 style={{ fontSize: 18, fontWeight: 500, letterSpacing: '-0.2px' }}>
-                  {mode === 'statistician' ? 'Statistical Output' : 'Key Finding'}
-                </h2>
-                {result && mode === 'statistician' && result.rCode && (
-                  <button onClick={downloadRCode} style={{ fontSize: 12, padding: '5px 12px', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <svg width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
-                    </svg>
-                    Download .R
-                  </button>
-                )}
-              </div>
+              <h2 style={{ fontSize: 18, fontWeight: 500, letterSpacing: '-0.2px', textAlign: 'center', width: '100%' }}>
+                {mode === 'statistician' ? 'Statistical Output' : 'Key Finding'}
+              </h2>
 
               {!result && !loading && <p style={{ fontSize: 13, opacity: 0.5 }}>Upload a CSV and run analysis to see results.</p>}
               {loading && (
@@ -1308,6 +1298,15 @@ export default function Dashboard() {
                 <div style={{ fontSize: 13, lineHeight: 1.7, opacity: 0.85, textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, padding: '0 1rem' }}>
                   {result.subgroup}
                 </div>
+              )}
+
+              {result && mode === 'statistician' && result.rCode && (
+                <button onClick={downloadRCode} style={{ fontSize: 12, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 6, marginTop: 'auto' }}>
+                  <svg width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                    </svg>
+                    Download .R
+                  </button>
               )}
             </div>
 
