@@ -4,6 +4,14 @@ npm-debug.log*
 # secrets
 .env
 .env.local
+<<<<<<< Updated upstream
+=======
+vertex-ai-credentials.json
+vertex-service-account.json
+secrets/
+*-credentials.json
+*-service-account.json
+>>>>>>> Stashed changes
 
 # runtime data (per-job)
 uploads/
