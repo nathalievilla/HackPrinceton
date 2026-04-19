@@ -85,7 +85,7 @@ export default function Auth({ onAuth }) {
         {/* Header */}
         <div style={{ textAlign: 'center', marginBottom: 48 }}>
           <h1 style={{ fontSize: 36, fontWeight: 600, letterSpacing: '-1px', marginBottom: 10 }}>
-            NAME TBD
+            BioStrata
           </h1>
           <p style={{ fontSize: 15, opacity: 0.5 }}>
             {mode === 'login' ? 'Sign in to your account' : 'Create your account'}
