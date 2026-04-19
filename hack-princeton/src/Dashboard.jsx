@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import toast from 'react-hot-toast'
 import { supabase } from './lib/supabaseClient'
 import Auth from './Auth'
 import Papa from 'papaparse'
@@ -18,16 +19,41 @@ function detectColumns(columns) {
   }
 }
 
-const LOADING_STEPS = [
-  'Reading your dataset...',
-  'Identifying column types and distributions...',
-  'Writing R analysis code...',
-  'Running XGBoost model...',
-  'Computing SHAP values...',
-  'Fitting Kaplan-Meier curves...',
-  'Running manager check on results...',
-  'Generating plain-English summary...',
-]
+// Maps backend job stage names (from backend/src/jobs.js STAGES) to UI labels.
+// Order matches the real pipeline; add a new entry here if a new stage is added.
+const STAGE_LABELS = {
+  uploaded: 'Validating upload',
+  agent1_planning: 'Agent 1: writing R analysis code',
+  qa_validation: 'Validating R output schema',
+  agent2_review: 'Agent 2: clinical QC review',
+  completed: 'Done',
+}
+
+// Layer 1 — rotating reassurance text that cycles every 4s within a stage.
+// Honest about how long things actually take; prevents "is it stuck?" anxiety
+// during long Vertex/Gemini calls.
+const STAGE_WAIT_MESSAGES = {
+  uploaded: [
+    'Reading CSV columns...',
+    'Detecting treatment + outcome columns...',
+  ],
+  agent1_planning: [
+    'Calling Gemini biostatistician...',
+    'Drafting analysis plan (typically 15-30s)...',
+    'Generating R code from the plan...',
+    'Still working — Gemini is reasoning through the dataset...',
+  ],
+  qa_validation: [
+    'Checking the R output schema...',
+    'Confirming required keys are present...',
+  ],
+  agent2_review: [
+    'Calling Gemini manager for QC review...',
+    'Looking for sample-size, label-leakage, and SHAP issues...',
+    'Drafting plain-English clinical summary...',
+  ],
+  completed: ['Done — rendering report...'],
+}
 
 function Collapsible({ title, children, defaultOpen = false }) {
   const [open, setOpen] = useState(defaultOpen)
@@ -249,6 +275,312 @@ function KMFigure({ result }) {
   )
 }
 
+// ---------------- Statistician-report components ----------------
+
+// Sections rendered in the StatisticianReport — keep IDs in sync with the
+// section anchors in the JSX. Order = reading order in the report.
+const STAT_SECTIONS = [
+  { id: 'demographics', label: 'Demographics' },
+  { id: 'subgroups',    label: 'Subgroups' },
+  { id: 'survival',     label: 'Survival Curves' },
+  { id: 'efficacy',     label: 'SHAP & QC' },
+  { id: 'rcode',        label: 'R Code' },
+  { id: 'provenance',   label: 'Provenance' },
+]
+
+// Renders a clinical-paper-style subgroup table from result.subgroups[].
+// Highlights any row where response_rate >= 1.5x baseline_rate.
+function SubgroupsTable({ subgroups }) {
+  if (!subgroups || !subgroups.length) {
+    return <p style={{ fontSize: 13, opacity: 0.5 }}>No subgroups returned by analysis.</p>
+  }
+  const rows = subgroups.map(s => {
+    const lift = (typeof s.response_rate === 'number' && typeof s.baseline_rate === 'number' && s.baseline_rate > 0)
+      ? s.response_rate / s.baseline_rate
+      : null
+    return { ...s, lift }
+  })
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+        <thead>
+          <tr>
+            {['Subgroup', 'n', 'Response', 'Baseline', 'Lift'].map(h => (
+              <th key={h} style={{ textAlign: 'left', padding: '8px 12px', borderBottom: '1px solid var(--border)', opacity: 0.5, fontWeight: 500 }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((s, i) => {
+            const flagged = typeof s.lift === 'number' && s.lift >= 1.5
+            return (
+              <tr key={i} style={{ background: flagged ? 'rgba(29, 158, 117, 0.08)' : (i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent') }}>
+                <td style={{ padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.05)', fontWeight: flagged ? 500 : 400 }}>
+                  {s.name || '—'}
+                  {flagged && <span style={{ marginLeft: 8, fontSize: 10, padding: '2px 6px', borderRadius: 999, background: '#1D9E75', color: '#fff' }}>candidate</span>}
+                </td>
+                <td style={{ padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{typeof s.size === 'number' ? s.size : '—'}</td>
+                <td style={{ padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{typeof s.response_rate === 'number' ? `${(s.response_rate * 100).toFixed(0)}%` : '—'}</td>
+                <td style={{ padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{typeof s.baseline_rate === 'number' ? `${(s.baseline_rate * 100).toFixed(0)}%` : '—'}</td>
+                <td style={{ padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.05)', color: flagged ? '#1D9E75' : 'inherit', fontWeight: flagged ? 500 : 400 }}>
+                  {typeof s.lift === 'number' ? `${s.lift.toFixed(2)}x` : '—'}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// Top-N feature importance table with horizontal bars.
+function FeatureImportanceTable({ shap }) {
+  const features = shap?.features || []
+  const importance = shap?.importance || []
+  if (!features.length || !importance.length) {
+    return <p style={{ fontSize: 13, opacity: 0.5 }}>No feature importance returned.</p>
+  }
+  const paired = features.map((f, i) => ({ feature: f, value: importance[i] || 0 }))
+    .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+    .slice(0, 10)
+  const max = Math.max(...paired.map(p => Math.abs(p.value))) || 1
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {paired.map(({ feature, value }) => (
+        <div key={feature} style={{ display: 'grid', gridTemplateColumns: '120px 1fr 60px', gap: 12, alignItems: 'center', fontSize: 12 }}>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={feature}>{feature}</span>
+          <div style={{ height: 8, background: 'rgba(255,255,255,0.06)', borderRadius: 2, overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${(Math.abs(value) / max) * 100}%`, background: '#185FA5', borderRadius: 2 }} />
+          </div>
+          <span style={{ textAlign: 'right', fontFamily: 'monospace', opacity: 0.7 }}>{value.toFixed(3)}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// Manager (Agent 2) QC review panel — verdict pill + flag list.
+function ManagerReviewPanel({ managerCheck }) {
+  if (!managerCheck) {
+    return <p style={{ fontSize: 13, opacity: 0.5 }}>No manager review available.</p>
+  }
+  const ok = managerCheck.clinically_reasonable
+  const flags = managerCheck.flags || []
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{
+          fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em',
+          padding: '4px 10px', borderRadius: 999,
+          background: ok ? 'rgba(29,158,117,0.15)' : 'rgba(245,158,11,0.15)',
+          color: ok ? '#1D9E75' : '#F59E0B',
+          border: `1px solid ${ok ? 'rgba(29,158,117,0.4)' : 'rgba(245,158,11,0.4)'}`,
+        }}>
+          {ok ? 'Clinically reasonable' : 'Flags raised'}
+        </span>
+        <span style={{ fontSize: 12, opacity: 0.6 }}>{flags.length} flag{flags.length === 1 ? '' : 's'}</span>
+      </div>
+      {flags.length === 0 ? (
+        <p style={{ fontSize: 12, opacity: 0.55, margin: 0 }}>No issues flagged.</p>
+      ) : (
+        <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {flags.map((f, i) => {
+            const sev = (f.severity || 'info').toLowerCase()
+            const colorMap = { warning: '#F59E0B', error: '#D85A30', info: '#185FA5' }
+            const color = colorMap[sev] || '#185FA5'
+            return (
+              <li key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', fontSize: 12, lineHeight: 1.55 }}>
+                <span style={{
+                  fontSize: 9, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em',
+                  padding: '2px 7px', borderRadius: 4, color: '#fff', background: color, flexShrink: 0,
+                  marginTop: 2,
+                }}>{sev}</span>
+                <span style={{ opacity: 0.85 }}>{f.message || JSON.stringify(f)}</span>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      {managerCheck.notes && (
+        <p style={{ fontSize: 11, opacity: 0.45, margin: '4px 0 0', fontStyle: 'italic', borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+          {managerCheck.notes}
+        </p>
+      )}
+    </div>
+  )
+}
+
+// Audit-style provenance: which agent/model produced what + R execution details.
+function ProvenancePanel({ agent1, agent2, execution }) {
+  const rows = [
+    ['Agent 1 provider', agent1?.provider || '—'],
+    ['Agent 1 model',    agent1?.model || '—'],
+    ['Agent 1 fallback reason', agent1?.used_fallback_reason || 'none'],
+    ['Agent 2 provider', agent2?.provider || '—'],
+    ['Agent 2 model',    agent2?.model || '—'],
+    ['Agent 2 fallback reason', agent2?.used_fallback_reason || 'none'],
+    ['R execution ok',   execution?.ok === undefined ? '—' : String(execution.ok)],
+    ['R exit code',      execution?.exit_code === undefined || execution?.exit_code === null ? '—' : String(execution.exit_code)],
+    ['R runtime (ms)',   execution?.runtime_ms === undefined ? '—' : execution.runtime_ms],
+    ['Synthetic output', execution?.synthetic ? 'yes' : 'no'],
+  ]
+  return (
+    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+      <tbody>
+        {rows.map(([k, v], i) => (
+          <tr key={k} style={{ background: i % 2 === 0 ? 'rgba(255,255,255,0.01)' : 'transparent' }}>
+            <td style={{ padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.05)', opacity: 0.55, width: '45%' }}>{k}</td>
+            <td style={{ padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.05)', fontFamily: 'monospace' }}>{String(v)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+// Sticky vertical TOC with active-section highlight + smooth scroll on click.
+function TocNav({ sections, activeId }) {
+  function scrollTo(id) {
+    const el = document.getElementById(id)
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+  return (
+    <aside style={{ position: 'sticky', top: 24, alignSelf: 'start', display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <p style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.4, margin: '0 0 8px', paddingLeft: 12 }}>On this page</p>
+      {sections.map(s => {
+        const active = s.id === activeId
+        return (
+          <button
+            key={s.id}
+            onClick={() => scrollTo(s.id)}
+            style={{
+              all: 'unset',
+              cursor: 'pointer',
+              fontSize: 13,
+              padding: '6px 12px',
+              borderLeft: `2px solid ${active ? '#185FA5' : 'transparent'}`,
+              color: active ? '#fff' : 'inherit',
+              opacity: active ? 1 : 0.55,
+              fontWeight: active ? 500 : 400,
+              transition: 'all 0.15s',
+            }}
+          >
+            {s.label}
+          </button>
+        )
+      })}
+    </aside>
+  )
+}
+
+// Full statistician-mode report: sticky TOC + 6 sections of real backend data.
+// Self-contained — owns activeSection state + IntersectionObserver internally.
+function StatisticianReport({ result, csvData, detectedCols }) {
+  const [activeId, setActiveId] = useState(STAT_SECTIONS[0].id)
+
+  useEffect(() => {
+    if (!result) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        // Pick the entry that's most visible AND above the viewport midline.
+        const visible = entries
+          .filter(e => e.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)
+        if (visible.length > 0) {
+          setActiveId(visible[0].target.id)
+        }
+      },
+      { rootMargin: '-80px 0px -50% 0px', threshold: [0, 0.25, 0.5, 0.75, 1] }
+    )
+    STAT_SECTIONS.forEach(s => {
+      const el = document.getElementById(s.id)
+      if (el) observer.observe(el)
+    })
+    return () => observer.disconnect()
+  }, [result])
+
+  if (!result) return null
+
+  const sectionStyle = { marginBottom: 40, scrollMarginTop: 24 }
+  const headingStyle = { fontSize: 16, fontWeight: 500, margin: '0 0 14px', letterSpacing: '-0.2px' }
+
+  return (
+    <section className="stat-report" style={{
+      borderTop: '1px solid var(--border)',
+      padding: '2rem 3rem',
+      display: 'grid',
+      gridTemplateColumns: '180px 1fr',
+      gap: 32,
+      alignItems: 'start',
+    }}>
+      <TocNav sections={STAT_SECTIONS} activeId={activeId} />
+      <div className="stat-report-content" style={{ minWidth: 0 }}>
+
+        <section id="demographics" style={sectionStyle}>
+          <h2 style={headingStyle}>Table 1: Baseline Demographics</h2>
+          <DemographicsTable csvData={csvData} detectedCols={detectedCols} result={result} />
+        </section>
+
+        <section id="subgroups" style={sectionStyle}>
+          <h2 style={headingStyle}>Subgroup Analysis</h2>
+          <SubgroupsTable subgroups={result.subgroups} />
+        </section>
+
+        <section id="survival" style={sectionStyle}>
+          <h2 style={headingStyle}>Kaplan–Meier Survival Curves</h2>
+          <KMFigure result={result} />
+        </section>
+
+        <section id="efficacy" style={{ ...sectionStyle, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+          <div>
+            <h2 style={headingStyle}>Feature Importance (SHAP-style)</h2>
+            <FeatureImportanceTable shap={result.shap} />
+          </div>
+          <div>
+            <h2 style={headingStyle}>Manager QC Review</h2>
+            <ManagerReviewPanel managerCheck={result.managerCheck} />
+          </div>
+        </section>
+
+        <section id="rcode" style={sectionStyle}>
+          <h2 style={headingStyle}>Generated R Code</h2>
+          <pre style={{
+            background: 'rgba(255,255,255,0.05)',
+            borderRadius: 8,
+            padding: 14,
+            fontSize: 11,
+            overflowX: 'auto',
+            whiteSpace: 'pre-wrap',
+            maxHeight: 400,
+            overflowY: 'auto',
+            lineHeight: 1.6,
+            fontFamily: 'monospace',
+            margin: 0,
+          }}>
+            {result.rCode || '— no R code returned (fallback path)'}
+          </pre>
+        </section>
+
+        <section id="provenance" style={sectionStyle}>
+          <h2 style={headingStyle}>Provenance &amp; Execution</h2>
+          <ProvenancePanel agent1={result.agent1} agent2={result.agent2} execution={result.execution} />
+        </section>
+
+      </div>
+
+      <style>{`
+        @media (max-width: 900px) {
+          .stat-report { grid-template-columns: 1fr !important; }
+          .stat-report aside { position: static !important; }
+        }
+      `}</style>
+    </section>
+  )
+}
+
+// ---------------- end statistician-report components ----------------
+
 // Receives session as a prop so it can filter by the current user
 function PastAnalyses() {
   const [history, setHistory] = useState([])
@@ -328,7 +660,9 @@ export default function Dashboard() {
   const [rawFile, setRawFile] = useState(null)
   const [detectedCols, setDetectedCols] = useState(null)
   const [loading, setLoading] = useState(false)
-  const [loadingStep, setLoadingStep] = useState(0)
+  const [currentJob, setCurrentJob] = useState(null)
+  const [subStepIndex, setSubStepIndex] = useState(0)
+  const previousStage = useRef(null)
   const [result, setResult] = useState(null)
   const [csvError, setCsvError] = useState(null)
   const [activeTab, setActiveTab] = useState('analysis')
@@ -346,13 +680,41 @@ export default function Dashboard() {
     return () => listener.subscription.unsubscribe()
   }, [])
 
+  // Layer 1: rotate the wait-text sub-step every 4s within the current backend stage.
+  // Resets to 0 whenever the stage changes (which moves the bar forward).
   useEffect(() => {
-    if (!loading) { setLoadingStep(0); return }
+    if (!loading || !currentJob?.stage) { setSubStepIndex(0); return }
+    setSubStepIndex(0)
+    const messages = STAGE_WAIT_MESSAGES[currentJob.stage] || []
+    if (messages.length <= 1) return
     const interval = setInterval(() => {
-      setLoadingStep(s => (s + 1) % LOADING_STEPS.length)
-    }, 1800)
+      setSubStepIndex(i => (i + 1) % messages.length)
+    }, 4000)
     return () => clearInterval(interval)
-  }, [loading])
+  }, [loading, currentJob?.stage])
+
+  // Layer 2: fire a toast when a stage finishes (i.e., the stage advances)
+  // and on terminal status (completed | failed). Skips the initial null -> uploaded
+  // transition because no real stage finished at that point.
+  useEffect(() => {
+    if (!loading || !currentJob) return
+    const prev = previousStage.current
+    const curr = currentJob.stage
+
+    if (prev && prev !== curr && STAGE_LABELS[prev] && prev !== 'completed') {
+      toast.success(`${STAGE_LABELS[prev]} complete`)
+    }
+    if (currentJob.status === 'completed' && prev !== 'completed') {
+      toast.success('Analysis complete', { duration: 5000 })
+    }
+    if (currentJob.status === 'failed') {
+      toast.error(
+        `Analysis failed: ${currentJob.error?.message || 'unknown error'}`,
+        { duration: 6000 }
+      )
+    }
+    previousStage.current = curr
+  }, [currentJob?.stage, currentJob?.status, loading])
 
   function handleLogout() { setSession(null) }
 
@@ -454,6 +816,8 @@ export default function Dashboard() {
     if (!csvData || !rawFile) return
     setLoading(true)
     setResult(null)
+    setCurrentJob(null)
+    previousStage.current = null
     try {
       const formData = new FormData()
       formData.append('file', rawFile)
@@ -504,6 +868,7 @@ export default function Dashboard() {
         await new Promise(r => setTimeout(r, 1500))
         const pollRes = await fetch(`http://localhost:3000/jobs/${job_id}`)
         job = await pollRes.json()
+        setCurrentJob(job)
         if (job.status === 'completed' || job.status === 'failed') break
       }
       if (job.status === 'failed') {
@@ -527,6 +892,7 @@ export default function Dashboard() {
       const analysisResults = report.results || {}
       
       setResult({
+        // existing fields
         summary: report.headline,
         rCode: analysisResults.rCode || '',
         pvalues: analysisResults.pvalues || '',
@@ -536,7 +902,13 @@ export default function Dashboard() {
         efficacy: analysisResults.efficacy || null,
         survival: analysisResults.survival || null,
         shap: analysisResults.shap || null,
-        subgroups: analysisResults.subgroups || null
+        subgroups: analysisResults.subgroups || null,
+        // new: backend fields the statistician report needs
+        execution: analysisResults.execution || null,
+        plan: report.plan || analysisResults.plan || [],
+        agent1: report.agent1 || null,
+        agent2: report.agent2 || null,
+        managerCheck: report.manager_check || null,
       })
     } catch (err) {
       setResult({ 
@@ -649,11 +1021,42 @@ export default function Dashboard() {
               )}
 
               {loading && (
-                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <div style={{ width: '100%', height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
-                    <div style={{ height: '100%', borderRadius: 2, background: '#185FA5', width: `${((loadingStep + 1) / LOADING_STEPS.length) * 100}%`, transition: 'width 1.6s ease' }} />
+                    <div
+                      className="loading-bar-sweep"
+                      style={{
+                        height: '100%',
+                        borderRadius: 2,
+                        width: `${Math.max(currentJob?.progress ?? 0, 5)}%`,
+                        transition: 'width 0.5s ease',
+                      }}
+                    />
                   </div>
-                  <p style={{ fontSize: 12, opacity: 0.5, textAlign: 'center' }}>{LOADING_STEPS[loadingStep]}</p>
+                  <p style={{ fontSize: 12, opacity: 0.7, textAlign: 'center', margin: 0 }}>
+                    {STAGE_LABELS[currentJob?.stage] || 'Starting analysis...'}
+                  </p>
+                  <p style={{ fontSize: 11, opacity: 0.45, textAlign: 'center', margin: 0, fontStyle: 'italic' }}>
+                    {(STAGE_WAIT_MESSAGES[currentJob?.stage] || ['Working...'])[subStepIndex] || ''}
+                  </p>
+                  <style>{`
+                    @keyframes loadingBarSweep {
+                      0%   { background-position: 100% 0; }
+                      100% { background-position: -100% 0; }
+                    }
+                    .loading-bar-sweep {
+                      background: linear-gradient(
+                        90deg,
+                        #185FA5 0%,
+                        #185FA5 30%,
+                        #6BB6FF 50%,
+                        #185FA5 70%,
+                        #185FA5 100%
+                      );
+                      background-size: 200% 100%;
+                      animation: loadingBarSweep 1.4s linear infinite;
+                    }
+                  `}</style>
                 </div>
               )}
 
@@ -689,27 +1092,43 @@ export default function Dashboard() {
                 </div>
               )}
 
-              {result && mode === 'statistician' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 16, width: '100%', textAlign: 'left' }}>
-                  <Collapsible title="P-values" defaultOpen>
-                    <p style={{ fontSize: 13, lineHeight: 1.6, margin: 0 }}>{result.pvalues || '—'}</p>
-                  </Collapsible>
-                  <Collapsible title="Confidence Intervals" defaultOpen>
-                    <p style={{ fontSize: 13, lineHeight: 1.6, margin: 0 }}>{result.confidenceIntervals || '—'}</p>
-                  </Collapsible>
-                  <Collapsible title="Demographics Table">
-                    <DemographicsTable csvData={csvData} detectedCols={detectedCols} result={result} />
-                  </Collapsible>
-                  <Collapsible title="Efficacy Table">
-                    <EfficacyTable result={result} />
-                  </Collapsible>
-                  <Collapsible title="Generated R Code">
-                    <pre style={{ background: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: 12, fontSize: 11, overflowX: 'auto', whiteSpace: 'pre-wrap', maxHeight: 280, overflowY: 'auto', lineHeight: 1.6, fontFamily: 'monospace', margin: 0 }}>
-                      {result.rCode || '—'}
-                    </pre>
-                  </Collapsible>
-                </div>
-              )}
+              {result && mode === 'statistician' && (() => {
+                // Pick the headline subgroup: largest positive lift over baseline.
+                const subs = (result.subgroups || []).filter(s =>
+                  typeof s.response_rate === 'number' && typeof s.baseline_rate === 'number'
+                )
+                const top = subs.length > 0
+                  ? subs.reduce((best, s) =>
+                      (s.response_rate - s.baseline_rate) > (best.response_rate - best.baseline_rate) ? s : best
+                    , subs[0])
+                  : null
+                const lift = top
+                  ? (top.baseline_rate > 0 ? (top.response_rate / top.baseline_rate - 1) * 100 : 0)
+                  : null
+                return (
+                  <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 14 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, width: '100%' }}>
+                      <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px' }}>
+                        <p style={{ fontSize: 10, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.4, margin: '0 0 6px' }}>Top subgroup</p>
+                        <p style={{ fontSize: 13, fontWeight: 500, margin: 0, lineHeight: 1.3, textAlign: 'left' }}>{top?.name || '—'}</p>
+                      </div>
+                      <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px' }}>
+                        <p style={{ fontSize: 10, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.4, margin: '0 0 6px' }}>Lift vs baseline</p>
+                        <p style={{ fontSize: 18, fontWeight: 500, margin: 0, color: lift && lift > 0 ? '#1D9E75' : 'inherit' }}>
+                          {typeof lift === 'number' ? `${lift > 0 ? '+' : ''}${lift.toFixed(0)}%` : '—'}
+                        </p>
+                      </div>
+                      <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px' }}>
+                        <p style={{ fontSize: 10, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.4, margin: '0 0 6px' }}>n</p>
+                        <p style={{ fontSize: 18, fontWeight: 500, margin: 0 }}>{top?.size ?? '—'}</p>
+                      </div>
+                    </div>
+                    <p style={{ fontSize: 11, opacity: 0.45, textAlign: 'center', margin: 0, fontStyle: 'italic' }}>
+                      Full analysis below ↓
+                    </p>
+                  </div>
+                )
+              })()}
 
               {result && mode === 'medical' && (
                 <div style={{ fontSize: 13, lineHeight: 1.7, opacity: 0.85, textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1 }}>
@@ -745,8 +1164,9 @@ export default function Dashboard() {
 
           </section>
 
-          {/* KM Survival Curves — full-width row below the three columns */}
-          {result && (
+          {/* KM Survival Curves — full-width row, MEDICAL MODE ONLY.
+              In statistician mode, KM lives inside <StatisticianReport /> below. */}
+          {result && mode === 'medical' && (
             <div style={{
               borderTop: '1px solid var(--border)',
               borderBottom: '1px solid var(--border)',
@@ -757,6 +1177,12 @@ export default function Dashboard() {
                 <KMFigure result={result} />
               </Collapsible>
             </div>
+          )}
+
+          {/* Full statistician-mode report: TOC + Demographics + Subgroups +
+              KM + SHAP + QC + R Code + Provenance. Only in statistician mode. */}
+          {result && mode === 'statistician' && (
+            <StatisticianReport result={result} csvData={csvData} detectedCols={detectedCols} />
           )}
         </>
       )}
