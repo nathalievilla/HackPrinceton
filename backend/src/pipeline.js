@@ -137,6 +137,11 @@ async function runPipeline({ job_id, csvPath, jobDir, resultsPath, reportPath, s
 
   // Persist results JSON for GET /results/:job_id
   console.log('💾 [PIPELINE] Preparing results payload...');
+  
+  // DEBUG: Log agent1 structure to help debugging
+  console.log('DEBUG - Agent1 keys:', JSON.stringify(Object.keys(agent1)));
+  console.log('DEBUG - Agent1.r_code exists:', !!agent1.r_code);
+  
   const resultsPayload = {
     job_id,
     summary: null,                       // filled in after Agent 2
@@ -144,6 +149,7 @@ async function runPipeline({ job_id, csvPath, jobDir, resultsPath, reportPath, s
     agent1_provider: agent1.provider,
     agent1_model: agent1.model,
     execution: agent1.execution,
+    r_code: agent1.r_code,               // Include R code for frontend
     ...agent1.output,
   };
   fs.writeFileSync(resultsPath, JSON.stringify(resultsPayload, null, 2));

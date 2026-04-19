@@ -126,10 +126,12 @@ async function runAgent1({ csvMeta, csvPath, jobDir }) {
   const runtime = runner.detectRRuntime();
   if (!runtime.available) {
     console.log('⚠️ [AGENT1] R runtime not available, using synthetic output');
+    // Use fallback R script for synthetic outputs so frontend can display R code
+    const fallbackCode = fs.readFileSync(FALLBACK_R_PATH, "utf8");
     return {
       provider,
       model,
-      r_code: rCode,
+      r_code: rCode || fallbackCode,
       output: syntheticAgent1Output(),
       execution: {
         ok: true,

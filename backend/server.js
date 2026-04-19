@@ -266,7 +266,13 @@ app.get("/report/:job_id", (req, res) => {
     return res.status(404).json({ error: 'report not ready or job not found' })
   }
   try {
-    res.json(JSON.parse(fs.readFileSync(file, 'utf8')))
+    const report = JSON.parse(fs.readFileSync(file, 'utf8'));
+    
+    // DEBUG: Log report structure to help frontend debugging
+    console.log('REPORT KEYS:', JSON.stringify(Object.keys(report)));
+    console.log('RESULTS KEYS:', JSON.stringify(Object.keys(report.results || {})));
+    
+    res.json(report)
   } catch (err) {
     res.status(500).json({ error: 'failed to parse report', details: err.message })
   }
@@ -357,7 +363,7 @@ app.listen(PORT, () => {
   const r = runner.detectRRuntime();
   console.log(`API listening on http://localhost:${PORT}`);
   console.log(`  llm_provider = ${llm.PROVIDER}`);
-  console.log(`  llm_model    = ${llm.GEMINI_MODEL}${llm.isConfigured() ? "" : "  (not configured; will use deterministic fallback)"}`);
+  console.log(`  llm_model    = ${llm.VERTEX_MODEL}${llm.isConfigured() ? "" : "  (not configured; will use deterministic fallback)"}`);
   console.log(`  supabase     = ${db.isConfigured() ? "configured" : "not configured (persistence disabled)"}`);
   console.log(`  r_runtime    = ${r.available ? r.version : "UNAVAILABLE - synthetic outputs"}`);
 });

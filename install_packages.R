@@ -24,7 +24,7 @@ packages <- c(
 cat("Installing packages:", paste(packages, collapse = ", "), "\n")
 
 # Install packages
-install.packages(packages, dependencies = TRUE)
+install.packages(packages, dependencies = TRUE, repos = 'https://cloud.r-project.org')
 
 cat("Installation complete! Verifying packages...\n")
 

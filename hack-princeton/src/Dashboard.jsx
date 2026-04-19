@@ -894,7 +894,7 @@ export default function Dashboard() {
       setResult({
         // existing fields
         summary: report.headline,
-        rCode: analysisResults.rCode || '',
+        rCode: analysisResults.r_code || '',
         pvalues: analysisResults.pvalues || '',
         confidenceIntervals: analysisResults.confidenceIntervals || '',
         subgroup: analysisResults.subgroup || report.headline,
