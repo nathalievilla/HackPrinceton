@@ -807,7 +807,7 @@ export default function Dashboard() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = 'nametbd_analysis.R'
+    a.download = 'biostrata_analysis.R'
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -944,7 +944,7 @@ export default function Dashboard() {
       <section id="center" style={{ padding: '2rem 3rem' }}>
         <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
           <div>
-            <h1 style={{ marginBottom: 4, fontSize: 32, letterSpacing: '-0.5px' }}>NAME TBD</h1>
+            <h1 style={{ marginBottom: 4, fontSize: 32, letterSpacing: '-0.5px' }}>BioStrata</h1>
             <p style={{ margin: 0, fontSize: 14, opacity: 0.6 }}>Clinical trial subgroup analysis</p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
