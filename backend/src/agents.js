@@ -1,11 +1,11 @@
 /**
- * Two-agent orchestration: Gemma "biostatistician" + Gemma "manager".
+ * Two-agent orchestration: Gemini "biostatistician" + Gemini "manager".
  *
  * IMPORTANT (agent guardrail):
- *   - All Gemma calls go through hf.js; all R execution goes through runner.js.
+ *   - All LLM calls go through llm.js; all R execution goes through runner.js.
  *     Do not bypass either.
  *   - Both agents have deterministic fallbacks. The demo MUST keep working
- *     when HF_TOKEN is missing or the API is rate-limited.
+ *     when GEMINI_API_KEY is missing or the API is rate-limited.
  *   - Agent 1 returns a structured bundle including the R code, the parsed
  *     R output, and execution metadata so the pipeline can persist them
  *     separately in Supabase (audit requirement).
@@ -14,7 +14,7 @@
 const fs = require("fs");
 const path = require("path");
 
-const hf = require("./hf");
+const llm = require("./llm");
 const runner = require("./runner");
 
 const FALLBACK_R_PATH = path.join(__dirname, "..", "r", "analyze_fallback.R");
@@ -70,7 +70,7 @@ function looksLikeValidRScript(code) {
 /**
  * @param {{ csvMeta: {columns:string[], row_count:number}, csvPath: string, jobDir: string }} args
  * @returns {Promise<{
- *   provider: "huggingface" | "fallback",
+ *   provider: "gemini" | "fallback",
  *   model?: string,
  *   r_code: string,
  *   output: object,
@@ -79,40 +79,53 @@ function looksLikeValidRScript(code) {
  * }>}
  */
 async function runAgent1({ csvMeta, csvPath, jobDir }) {
+  console.log('\n🔬 [AGENT1] Starting biostatistician agent...');
   let rCode = null;
   let provider = "fallback";
   let model = null;
   let fallbackReason = null;
 
-  if (hf.isConfigured()) {
-    const hfResult = await hf.callGemma([
-      { role: "system", content: AGENT1_SYSTEM },
-      { role: "user", content: buildAgent1UserPrompt(csvMeta) },
-    ], { max_tokens: 1500, temperature: 0.2 });
-
-    if (hfResult.ok) {
-      const candidate = stripMarkdownFences(hfResult.text);
+  // Try to generate R code using the LLM
+  try {
+    console.log('📋 [AGENT1] Generating analysis plan...');
+    const plan = await llm.generateAnalysisPlan(csvMeta);
+    console.log(`✅ [AGENT1] Analysis plan generated via ${plan.provider}`);
+    
+    console.log('⚙️ [AGENT1] Generating R code from plan...');
+    const codeResult = await llm.generateRCode(plan, csvMeta);
+    console.log(`✅ [AGENT1] R code generated via ${codeResult.provider}`);
+    
+    if (codeResult.provider !== "fallback") {
+      const candidate = stripMarkdownFences(codeResult.r_code);
       if (looksLikeValidRScript(candidate)) {
         rCode = candidate;
-        provider = "huggingface";
-        model = hfResult.model;
+        provider = codeResult.provider;
+        model = "gemini";
+        console.log('✅ [AGENT1] R code validation passed');
       } else {
         fallbackReason = "model output did not look like a valid R script";
+        console.log('⚠️ [AGENT1] R code validation failed');
       }
     } else {
-      fallbackReason = `HF call failed: ${hfResult.error}`;
+      rCode = codeResult.r_code; // Use fallback R code
+      fallbackReason = "LLM provider not configured or failed";
+      console.log('📝 [AGENT1] Using fallback R code');
     }
-  } else {
-    fallbackReason = "HF_TOKEN not configured";
+  } catch (error) {
+    fallbackReason = `LLM call failed: ${error.message}`;
+    console.log('❌ [AGENT1] Error generating code:', error.message);
   }
 
   if (!rCode) {
+    console.log('📝 [AGENT1] No R code generated, using fallback script');
     rCode = fs.readFileSync(FALLBACK_R_PATH, "utf8");
   }
 
   // Execute R (or use synthetic output if Rscript is not installed).
+  console.log('🔄 [AGENT1] Checking R runtime...');
   const runtime = runner.detectRRuntime();
   if (!runtime.available) {
+    console.log('⚠️ [AGENT1] R runtime not available, using synthetic output');
     return {
       provider,
       model,
@@ -129,17 +142,21 @@ async function runAgent1({ csvMeta, csvPath, jobDir }) {
     };
   }
 
+  console.log('🏃 [AGENT1] Executing R script...');
   const run = await runner.runGeneratedRScript({ jobDir, rCode, csvPath });
   if (!run.execution.ok || !run.output) {
+    console.log('❌ [AGENT1] R script execution failed, trying fallback...');
     // Retry once with the deterministic fallback script if the model script failed.
-    if (provider === "huggingface") {
+    if (provider === "gemini") {
       const fallbackCode = fs.readFileSync(FALLBACK_R_PATH, "utf8");
+      console.log('🔄 [AGENT1] Retrying with fallback R script...');
       const fallbackRun = await runner.runGeneratedRScript({
         jobDir,
         rCode: fallbackCode,
         csvPath,
       });
       if (fallbackRun.execution.ok && fallbackRun.output) {
+        console.log('✅ [AGENT1] Fallback R script succeeded');
         return {
           provider: "fallback",
           model,
@@ -150,6 +167,7 @@ async function runAgent1({ csvMeta, csvPath, jobDir }) {
         };
       }
     }
+    console.log('❌ [AGENT1] Both primary and fallback R scripts failed');
     return {
       provider,
       model,
@@ -160,6 +178,7 @@ async function runAgent1({ csvMeta, csvPath, jobDir }) {
     };
   }
 
+  console.log('✅ [AGENT1] R script execution successful');
   return {
     provider,
     model,
@@ -173,22 +192,54 @@ async function runAgent1({ csvMeta, csvPath, jobDir }) {
 function syntheticAgent1Output() {
   return {
     meta: { synthetic: true, source: "agent1_synthetic" },
+    demographics: {
+      total_patients: 1000,
+      arms: [
+        { name: "Control", n: 500, age_mean: 45.2, age_sd: 12.1 },
+        { name: "Treatment", n: 500, age_mean: 44.8, age_sd: 11.8 }
+      ],
+      baseline_characteristics: "Synthetic baseline table generated for demo purposes."
+    },
+    efficacy: {
+      primary_endpoint: "Response Rate",
+      control_rate: 0.35,
+      treatment_rate: 0.52,
+      odds_ratio: 2.1,
+      p_value: 0.003,
+      confidence_interval: "[1.4, 3.2]"
+    },
+    data_cleaning: {
+      original_rows: 1000,
+      final_rows: 995,
+      excluded_rows: 5,
+      exclusion_reasons: ["Missing outcome data", "Protocol violations"],
+      imputed_values: 12,
+      quality_score: "High"
+    },
     shap: {
-      features: ["age", "trt", "label"],
+      features: ["age", "treatment", "baseline_score"],
       importance: [0.5, 0.3, 0.2],
     },
     survival: {
       time_points: [0, 4, 8, 12, 16, 20, 24],
       curves: {
         overall: [1.0, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7],
+        control: [1.0, 0.92, 0.84, 0.76, 0.68, 0.60, 0.55],
+        treatment: [1.0, 0.98, 0.96, 0.94, 0.92, 0.90, 0.85]
       },
     },
     subgroups: [
       {
         name: "Overall cohort (synthetic)",
-        size: 0,
-        response_rate: 0.5,
-        baseline_rate: 0.5,
+        size: 995,
+        response_rate: 0.44,
+        baseline_rate: 0.35,
+      },
+      {
+        name: "Age ≥ 65 years",
+        size: 156,
+        response_rate: 0.38,
+        baseline_rate: 0.35,
       },
     ],
   };
@@ -296,7 +347,7 @@ function deterministicManagerCheck(agent1Output) {
 /**
  * @param {object} agent1Output
  * @returns {Promise<{
- *   provider: "huggingface" | "fallback",
+ *   provider: "gemini" | "fallback",
  *   model?: string,
  *   clinically_reasonable: boolean,
  *   flags: Array<{severity: string, message: string}>,
@@ -305,37 +356,62 @@ function deterministicManagerCheck(agent1Output) {
  * }>}
  */
 async function runAgent2(agent1Output) {
+  console.log('\n👨‍💼 [AGENT2] Starting manager/QC agent...');
   if (!agent1Output) {
+    console.log('❌ [AGENT2] No Agent1 output provided');
     const det = deterministicManagerCheck({});
     return { provider: "fallback", ...det, used_fallback_reason: "no agent1 output" };
   }
 
-  if (hf.isConfigured()) {
-    const hfResult = await hf.callGemma([
-      { role: "system", content: AGENT2_SYSTEM },
-      { role: "user", content: buildAgent2UserPrompt(agent1Output) },
-    ], { max_tokens: 600, temperature: 0.3 });
-
-    if (hfResult.ok) {
-      const parsed = tryParseJsonObject(hfResult.text);
-      if (parsed && typeof parsed === "object" && Array.isArray(parsed.flags) && typeof parsed.summary === "string") {
-        return {
-          provider: "huggingface",
-          model: hfResult.model,
-          clinically_reasonable: !!parsed.clinically_reasonable,
-          flags: parsed.flags,
-          summary: parsed.summary,
-        };
-      }
-      const det = deterministicManagerCheck(agent1Output);
-      return { provider: "fallback", model: hfResult.model, ...det, used_fallback_reason: "model output was not valid JSON" };
+  try {
+    console.log('📝 [AGENT2] Generating summary...');
+    // Try to get summary and manager check using LLM
+    const summaryResult = await llm.generateSummary(agent1Output);
+    console.log(`✅ [AGENT2] Summary generated via ${summaryResult.provider}`);
+    
+    console.log('🔍 [AGENT2] Running manager check...');
+    const managerResult = await llm.managerCheck(agent1Output);
+    console.log(`✅ [AGENT2] Manager check completed via ${managerResult.provider}`);
+    
+    if (summaryResult.provider !== "fallback" && managerResult.provider !== "fallback") {
+      console.log(`✅ [AGENT2] Both summary and manager check successful via ${summaryResult.provider}`);
+      return {
+        provider: summaryResult.provider,
+        model: summaryResult.provider,
+        clinically_reasonable: managerResult.clinically_reasonable,
+        flags: managerResult.flags,
+        summary: summaryResult.summary,
+        overall_assessment: managerResult.overall_assessment,
+        recommendations: managerResult.recommendations,
+        notes: managerResult.notes,
+      };
     }
+    
+    console.log('⚠️ [AGENT2] One or both LLM calls failed, using fallback with partial results');
+    // If either failed, use fallback but try to use any successful parts
     const det = deterministicManagerCheck(agent1Output);
-    return { provider: "fallback", ...det, used_fallback_reason: `HF call failed: ${hfResult.error}` };
+    return { 
+      provider: "fallback", 
+      model: "gemini", 
+      ...det, 
+      summary: summaryResult.provider !== "fallback" ? summaryResult.summary : det.summary,
+      overall_assessment: managerResult.overall_assessment || "Analysis completed with fallback processing.",
+      recommendations: managerResult.recommendations || ["Review analysis with senior biostatistician."],
+      notes: managerResult.notes || "Automated review only. Statistician sign-off required before clinical decisions.",
+      used_fallback_reason: "LLM provider not configured or failed" 
+    };
+  } catch (error) {
+    console.log('❌ [AGENT2] Error during agent processing:', error.message);
+    const det = deterministicManagerCheck(agent1Output);
+    return { 
+      provider: "fallback", 
+      ...det, 
+      overall_assessment: "Analysis completed with fallback processing due to error.",
+      recommendations: ["Review analysis with senior biostatistician.", "Investigate LLM integration issues."],
+      notes: "Automated review only. Statistician sign-off required before clinical decisions.",
+      used_fallback_reason: `LLM call failed: ${error.message}` 
+    };
   }
-
-  const det = deterministicManagerCheck(agent1Output);
-  return { provider: "fallback", ...det, used_fallback_reason: "HF_TOKEN not configured" };
 }
 
 module.exports = {

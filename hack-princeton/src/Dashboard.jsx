@@ -178,27 +178,32 @@ function PastAnalyses() {
   const [error, setError] = useState(null)
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data, error: userError }) => {
-      if (userError || !data?.user) {
-        setError('Could not get current user.')
+    // Use backend API endpoint instead of direct Supabase call
+    fetch('http://localhost:3000/results')
+      .then(response => {
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        }
+        return response.json()
+      })
+      .then(data => {
+        // Map backend data structure to frontend expectations
+        const mappedRows = (data.rows || []).map(row => ({
+          id: row.job_id,
+          original_filename: row.uploaded_file?.name || 'Unknown file',
+          row_count: row.uploaded_file?.size || '—',
+          columns: row.uploaded_file?.columns || [],
+          summary: row.summary || '—',
+          uploaded_at: row.created_at
+        }))
+        setHistory(mappedRows)
         setLoading(false)
-        return
-      }
-      supabase
-        .from('csv_uploads')
-        .select('*')
-        .eq('user_id', data.user.id)
-        .order('uploaded_at', { ascending: false })
-        .limit(20)
-        .then(({ data: rows, error: queryError }) => {
-          if (queryError) {
-            console.error('PastAnalyses query error:', queryError)
-            setError(queryError.message)
-          }
-          setHistory(rows || [])
-          setLoading(false)
-        })
-    })
+      })
+      .catch(err => {
+        console.error('PastAnalyses fetch error:', err)
+        setError(err.message)
+        setLoading(false)
+      })
   }, [])
 
   if (loading) return <p style={{ fontSize: 13, opacity: 0.5, padding: '1rem' }}>Loading history...</p>
@@ -335,6 +340,25 @@ export default function Dashboard() {
           Authorization: `Bearer ${session.access_token}`,
         },
       })
+
+      if (!uploadRes.ok) {
+        const errorData = await uploadRes.json()
+        console.error('Upload failed:', errorData)
+        
+        if (errorData.error === 'csv_analysis_failed') {
+          setResult({ 
+            summary: `CSV analysis failed: ${errorData.details?.map(d => d.message).join('; ') || 'Unknown error'}`, 
+            rCode: '', pvalues: '', confidenceIntervals: '', subgroup: '' 
+          })
+        } else {
+          setResult({ 
+            summary: `Upload failed: ${errorData.error || 'Unknown error'}. ${errorData.details ? JSON.stringify(errorData.details) : ''}`, 
+            rCode: '', pvalues: '', confidenceIntervals: '', subgroup: '' 
+          })
+        }
+        setLoading(false)
+        return
+      }
 
       const { job_id } = await uploadRes.json()
       let job = null

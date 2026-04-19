@@ -41,6 +41,7 @@ function nowIso() {
 
 function createJob({ uploadedFile }) {
   const job_id = newJobId();
+  console.log(`🎨 [JOBS] Creating job: ${job_id}`);
   const job = {
     job_id,
     status: "queued",
@@ -81,6 +82,7 @@ function _stageIndex(stageName) {
 }
 
 function startStage(job_id, stageName) {
+  console.log(`🟡 [JOBS] Starting stage: ${stageName} for job ${job_id}`);
   const job = jobs.get(job_id);
   if (!job) return;
   job.status = "running";
@@ -98,6 +100,7 @@ function startStage(job_id, stageName) {
 }
 
 function finishStage(job_id, stageName, { message } = {}) {
+  console.log(`🟢 [JOBS] Finishing stage: ${stageName} for job ${job_id}`);
   const job = jobs.get(job_id);
   if (!job) return;
   const stage = job.stages.find((s) => s.name === stageName);
@@ -110,6 +113,7 @@ function finishStage(job_id, stageName, { message } = {}) {
 }
 
 function failStage(job_id, stageName, errorObj) {
+  console.log(`🔴 [JOBS] Stage failed: ${stageName} for job ${job_id} - ${errorObj?.message || 'unknown error'}`);
   const job = jobs.get(job_id);
   if (!job) return;
   const stage = job.stages.find((s) => s.name === stageName);
@@ -129,6 +133,7 @@ function failStage(job_id, stageName, errorObj) {
 }
 
 function completeJob(job_id) {
+  console.log(`✅ [JOBS] Job completed: ${job_id}`);
   const job = jobs.get(job_id);
   if (!job) return;
   job.status = "completed";

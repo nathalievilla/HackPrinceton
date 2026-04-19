@@ -1,14 +1,14 @@
 /**
- * HackPrinceton backend - HF Gemma two-agent R analysis pipeline.
+ * HackPrinceton backend - Gemini two-agent R analysis pipeline.
  *
  * IMPORTANT (agent guardrail):
  *   - This file is intentionally small. Routes only. Heavy logic lives in
- *     src/jobs.js, src/runner.js, src/validators.js, src/hf.js, src/agents.js,
+ *     src/jobs.js, src/runner.js, src/validators.js, src/llm.js, src/agents.js,
  *     src/db.js, src/pipeline.js, src/trialContext.js.
  *     See ../AGENTS.md for the full architecture contract.
  *
  *   - React-facing API contract (do not rename without versioned migration):
- *       GET  /health                 -> { ok, r_runtime, hf, supabase }
+ *       GET  /health                 -> { ok, r_runtime, llm, supabase }
  *       POST /upload                 -> { job_id, status: "queued" }
  *                                       400 with structured errors if columns invalid
  *       GET  /jobs/:job_id           -> full job state (polling target)
@@ -41,31 +41,24 @@ const path = require('path')
 const crypto = require('crypto')
 const { createClient } = require('@supabase/supabase-js')
 
-<<<<<<< Updated upstream
-const jobsModule = require('./src/jobs')
-const runner = require('./src/runner')
-const llm = require('./src/llm')
-const pipeline = require('./src/pipeline')
-=======
 const jobsModule = require("./src/jobs");
 const runner = require("./src/runner");
-const hf = require("./src/hf");
+const llm = require("./src/llm");
 const validators = require("./src/validators");
 const agents = require("./src/agents");
 const db = require("./src/db");
 const pipeline = require("./src/pipeline");
 const trialContext = require("./src/trialContext");
->>>>>>> Stashed changes
 
 const app = express()
 const PORT = process.env.PORT || 3000
 
 // Use the service role key here — this bypasses RLS so the backend can write
 // rows on behalf of any user. Never expose this key on the frontend.
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-)
+// Only create Supabase client if environment variables are configured.
+const supabase = (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) 
+  ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
+  : null
 
 const UPLOAD_DIR = path.join(__dirname, 'uploads')
 const RESULTS_DIR = path.join(__dirname, 'results')
@@ -104,23 +97,11 @@ function readCsvMeta(csvPath) {
 
 // ---------- routes ----------
 
-<<<<<<< Updated upstream
-app.get('/health', (_req, res) => {
-  const r = runner.detectRRuntime()
-  res.json({
-    ok: true,
-    llm_provider: llm.PROVIDER,
-    r_runtime: r,
-  })
-})
-
-app.post('/upload', upload.single('file'), async (req, res) => {
-=======
 app.get("/health", (_req, res) => {
   res.json({
     ok: true,
     r_runtime: runner.detectRRuntime(),
-    hf: { configured: hf.isConfigured(), model: hf.HF_MODEL },
+    llm: { provider: llm.PROVIDER, configured: llm.isConfigured(), model: llm.GEMINI_MODEL },
     supabase: { configured: db.isConfigured() },
   });
 });
@@ -131,41 +112,58 @@ app.get("/health", (_req, res) => {
  * Validates columns synchronously; returns 400 with structured errors
  * if invalid. Otherwise queues the async pipeline and returns immediately.
  */
-app.post("/upload", upload.single("file"), (req, res) => {
->>>>>>> Stashed changes
+app.post("/upload", upload.single("file"), async (req, res) => {
+  console.log('\n📤 [SERVER] Upload request received');
   try {
     if (!req.file) {
+      console.log('❌ [SERVER] Upload failed - no file provided');
       return res.status(400).json({ error: 'file field is required' })
     }
 
     // Verify the user's JWT sent by the frontend in the Authorization header.
     // getUser() validates the token against Supabase and returns the user record.
-    const authHeader = req.headers.authorization || ''
-    const token = authHeader.replace('Bearer ', '').trim()
-    if (!token) {
-      return res.status(401).json({ error: 'missing authorization header' })
-    }
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token)
-    if (authError || !user) {
-      return res.status(401).json({ error: 'invalid or expired token' })
+    // Skip authentication if Supabase is not configured.
+    console.log('🔐 [SERVER] Checking authentication...');
+    if (supabase) {
+      console.log('🔐 [SERVER] Supabase configured, validating JWT...');
+      const authHeader = req.headers.authorization || ''
+      const token = authHeader.replace('Bearer ', '').trim()
+      if (!token) {
+        console.log('❌ [SERVER] Missing authorization header');
+        return res.status(401).json({ error: 'missing authorization header' })
+      }
+      console.log('🔐 [SERVER] Token found, verifying with Supabase...');
+      const { data: { user }, error: authError } = await supabase.auth.getUser(token)
+      if (authError || !user) {
+        console.log('❌ [SERVER] Invalid or expired token:', authError?.message);
+        return res.status(401).json({ error: 'invalid or expired token' })
+      }
+      console.log('✅ [SERVER] Authentication successful for user:', user.id);
+    } else {
+      console.log('⚠️ [SERVER] Supabase not configured, skipping auth');
     }
 
+    console.log('📋 [SERVER] Validating uploaded file...');
     const fileCheck = validators.validateUploadedCsv(req.file.path);
     if (!fileCheck.ok) {
+      console.log('❌ [SERVER] File validation failed:', fileCheck.errors);
       try { fs.unlinkSync(req.file.path); } catch (_) {}
       return res.status(400).json({ error: "invalid_file", details: fileCheck.errors });
     }
+    console.log('✅ [SERVER] File validation passed');
 
+    console.log('📋 [SERVER] Analyzing CSV structure...');
     const colCheck = validators.validateCsvColumns(req.file.path);
     if (!colCheck.ok) {
+      console.log('❌ [SERVER] CSV analysis failed:', colCheck.errors);
       try { fs.unlinkSync(req.file.path); } catch (_) {}
       return res.status(400).json({
-        error: "missing_required_columns",
-        required: validators.REQUIRED_INPUT_COLUMNS,
+        error: "csv_analysis_failed",
         details: colCheck.errors,
-        columns_found: colCheck.columns,
       });
     }
+    console.log('✅ [SERVER] CSV analysis completed');
+    console.log('📈 [SERVER] CSV structure:', colCheck.suggestions);
 
     const job = jobsModule.createJob({
       uploadedFile: {
@@ -174,39 +172,15 @@ app.post("/upload", upload.single("file"), (req, res) => {
         size: req.file.size,
       },
     })
+    console.log(`✅ [SERVER] Job created with ID: ${job.job_id}`);
 
-<<<<<<< Updated upstream
-    const jobDir = path.join(RUNTIME_DIR, job.job_id)
-    fs.mkdirSync(jobDir, { recursive: true })
-
-    const resultsPath = path.join(RESULTS_DIR, `${job.job_id}.results.json`)
-    const reportPath = path.join(RESULTS_DIR, `${job.job_id}.report.json`)
-
-    // Persist the upload record to Supabase immediately so the row exists
-    // even if the pipeline hasn't finished yet. Summary gets patched in
-    // by pipeline.js once the job completes.
-    const { columns, row_count } = readCsvMeta(req.file.path)
-    const { error: insertError } = await supabase.from('csv_uploads').insert({
-      user_id: user.id,
-      job_id: job.job_id,
-      original_filename: req.file.originalname,
-      row_count,
-      columns,
-      summary: null,
-      uploaded_at: new Date().toISOString(),
-    })
-    if (insertError) {
-      // Non-fatal: log but don't block the analysis
-      console.error('Supabase insert failed:', insertError.message)
-    }
-=======
     const jobDir = path.join(RUNTIME_DIR, job.job_id);
     fs.mkdirSync(jobDir, { recursive: true });
     const resultsPath = path.join(RESULTS_DIR, `${job.job_id}.results.json`);
     const reportPath = path.join(RESULTS_DIR, `${job.job_id}.report.json`);
->>>>>>> Stashed changes
 
     setImmediate(() => {
+      console.log(`🚀 [SERVER] Starting pipeline for job ${job.job_id}`);
       pipeline
         .runPipeline({
           job_id: job.job_id,
@@ -218,13 +192,8 @@ app.post("/upload", upload.single("file"), (req, res) => {
           supabase,
         })
         .catch((err) => {
-<<<<<<< Updated upstream
-          console.error(`pipeline crashed for job ${job.job_id}:`, err)
-          jobsModule.failStage(job.job_id, job.stage || 'uploaded', {
-=======
-          console.error(`pipeline crashed for job ${job.job_id}:`, err);
+          console.error(`❌ [SERVER] Pipeline crashed for job ${job.job_id}:`, err);
           jobsModule.failStage(job.job_id, jobsModule.getJob(job.job_id)?.stage || "uploaded", {
->>>>>>> Stashed changes
             message: err.message,
           })
         })
@@ -237,34 +206,21 @@ app.post("/upload", upload.single("file"), (req, res) => {
   }
 })
 
-<<<<<<< Updated upstream
-app.get('/jobs/:job_id', (req, res) => {
-  const job = jobsModule.getJob(req.params.job_id)
-  if (!job) return res.status(404).json({ error: 'job not found' })
-  res.json(job)
-})
-
-app.get('/results/:job_id', (req, res) => {
-  const file = path.join(RESULTS_DIR, `${req.params.job_id}.results.json`)
-  if (!fs.existsSync(file)) {
-    return res.status(404).json({ error: 'results not ready or job not found' })
-  }
-  try {
-    res.json(JSON.parse(fs.readFileSync(file, 'utf8')))
-  } catch (err) {
-    res.status(500).json({ error: 'failed to parse results', details: err.message })
-  }
-})
-
-app.get('/report/:job_id', (req, res) => {
-  const file = path.join(RESULTS_DIR, `${req.params.job_id}.report.json`)
-=======
 /**
  * GET /jobs/:job_id - polling target for React.
  */
 app.get("/jobs/:job_id", (req, res) => {
   const job = jobsModule.getJob(req.params.job_id);
-  if (!job) return res.status(404).json({ error: "job not found" });
+  if (!job) {
+    console.log(`❌ [SERVER] Job not found: ${req.params.job_id}`);
+    return res.status(404).json({ error: "job not found" });
+  }
+  
+  // Only log significant status changes to avoid spam
+  if (job.status === 'completed' || job.status === 'failed') {
+    console.log(`🔍 [SERVER] Status check - Job ${job.job_id}: ${job.status} (${job.stage})`);
+  }
+  
   res.json(job);
 });
 
@@ -306,7 +262,6 @@ app.get("/results/:job_id", async (req, res) => {
  */
 app.get("/report/:job_id", (req, res) => {
   const file = path.join(RESULTS_DIR, `${req.params.job_id}.report.json`);
->>>>>>> Stashed changes
   if (!fs.existsSync(file)) {
     return res.status(404).json({ error: 'report not ready or job not found' })
   }
@@ -317,25 +272,6 @@ app.get("/report/:job_id", (req, res) => {
   }
 })
 
-<<<<<<< Updated upstream
-// temporary compatibility shim
-app.get('/results', (req, res) => {
-  const job_id = req.query.job_id
-  if (!job_id || typeof job_id !== 'string') {
-    return res.status(400).json({ error: 'job_id query param is required' })
-  }
-  const file = path.join(RESULTS_DIR, `${job_id}.results.json`)
-  if (!fs.existsSync(file)) {
-    return res.status(404).json({ error: 'results not ready or job not found' })
-  }
-  try {
-    res.set('X-Deprecated', 'use GET /results/:job_id')
-    res.json(JSON.parse(fs.readFileSync(file, 'utf8')))
-  } catch (err) {
-    res.status(500).json({ error: 'failed to parse results', details: err.message })
-  }
-})
-=======
 /**
  * POST /agent1 - standalone Gemma biostatistician.
  * Two ways to call:
@@ -356,10 +292,8 @@ app.post("/agent1", upload.single("file"), async (req, res) => {
       if (!colCheck.ok) {
         try { fs.unlinkSync(csvPath); } catch (_) {}
         return res.status(400).json({
-          error: "missing_required_columns",
-          required: validators.REQUIRED_INPUT_COLUMNS,
+          error: "csv_analysis_failed",
           details: colCheck.errors,
-          columns_found: colCheck.columns,
         });
       }
       csvMeta = { columns: colCheck.columns, row_count: null };
@@ -414,24 +348,16 @@ app.post("/agent2", async (req, res) => {
 app.get("/trial-context", (_req, res) => {
   res.json(trialContext.getTrialContext());
 });
->>>>>>> Stashed changes
 
 app.use((_req, res) => {
   res.status(404).json({ error: 'not_found' })
 })
 
 app.listen(PORT, () => {
-<<<<<<< Updated upstream
-  const r = runner.detectRRuntime()
-  console.log(`API listening on http://localhost:${PORT}`)
-  console.log(`  llm_provider = ${llm.PROVIDER}`)
-  console.log(`  r_runtime    = ${r.available ? r.version : 'UNAVAILABLE - synthetic outputs'}`)
-})
-=======
   const r = runner.detectRRuntime();
   console.log(`API listening on http://localhost:${PORT}`);
-  console.log(`  hf_model    = ${hf.HF_MODEL}${hf.isConfigured() ? "" : "  (HF_TOKEN not set; will use deterministic fallback)"}`);
-  console.log(`  supabase    = ${db.isConfigured() ? "configured" : "not configured (persistence disabled)"}`);
-  console.log(`  r_runtime   = ${r.available ? r.version : "UNAVAILABLE - synthetic outputs"}`);
+  console.log(`  llm_provider = ${llm.PROVIDER}`);
+  console.log(`  llm_model    = ${llm.GEMINI_MODEL}${llm.isConfigured() ? "" : "  (not configured; will use deterministic fallback)"}`);
+  console.log(`  supabase     = ${db.isConfigured() ? "configured" : "not configured (persistence disabled)"}`);
+  console.log(`  r_runtime    = ${r.available ? r.version : "UNAVAILABLE - synthetic outputs"}`);
 });
->>>>>>> Stashed changes

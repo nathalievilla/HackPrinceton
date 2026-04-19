@@ -13,14 +13,22 @@
 const fs = require("fs");
 const path = require("path");
 
-<<<<<<< Updated upstream
-const REQUIRED_OUTPUT_KEYS = ["shap", "survival", "subgroups", "demographics", "efficacy", "data_cleaning"];
-=======
-// Must match REQUIRED_COLUMNS in hack-princeton/src/Dashboard.jsx (lowercased).
-const REQUIRED_INPUT_COLUMNS = ["age", "trt", "label"];
-const REQUIRED_OUTPUT_KEYS = ["shap", "survival", "subgroups"];
+// Flexible system - no longer requires specific columns
+// The system will auto-detect the best columns to use for analysis
+const SUGGESTED_INPUT_COLUMNS = ["age", "trt", "label"]; // For reference only
 
->>>>>>> Stashed changes
+// Column type detection patterns
+const COLUMN_PATTERNS = {
+  age: /\b(age|years?|yrs?)\b/i,
+  treatment: /\b(trt|treatment|arm|group|drug|therapy|intervention)\b/i,
+  outcome: /\b(label|outcome|response|event|death|survival|dropout|adverse|status|result)\b/i,
+  demographic: /\b(gender|sex|race|ethnicity|weight|height|bmi)\b/i,
+  clinical: /\b(bp|pressure|cholesterol|glucose|creatinine|lab|test)\b/i,
+  id: /\b(id|subject|patient|participant|number|#)\b/i
+};
+
+const REQUIRED_OUTPUT_KEYS = ["shap", "survival", "subgroups", "demographics", "efficacy", "data_cleaning"];
+
 function validateUploadedCsv(filePath) {
   const errors = [];
   if (!fs.existsSync(filePath)) {
@@ -38,39 +46,80 @@ function validateUploadedCsv(filePath) {
 }
 
 /**
- * Reads only the header line and confirms required columns exist
- * (case-insensitive). Returns structured errors so the frontend can
- * surface them verbatim.
+ * Analyzes CSV columns and suggests the best ones for clinical analysis.
+ * Now works with any CSV structure - no required columns!
  */
-function validateCsvColumns(filePath, required = REQUIRED_INPUT_COLUMNS) {
+function validateCsvColumns(filePath) {
   try {
     const raw = fs.readFileSync(filePath, "utf8");
-    const firstLine = (raw.split(/\r?\n/, 1)[0] || "").trim();
-    if (!firstLine) {
+    const lines = raw.split(/\r?\n/).filter(Boolean);
+    
+    if (lines.length < 2) {
+      return {
+        ok: false,
+        errors: [{ code: "insufficient_data", message: "CSV must have at least a header and one data row." }],
+        columns: [],
+      };
+    }
+    
+    const headerLine = lines[0].trim();
+    if (!headerLine) {
       return {
         ok: false,
         errors: [{ code: "empty_header", message: "CSV header row is empty" }],
         columns: [],
       };
     }
-    const columns = firstLine
+    
+    const columns = headerLine
       .split(",")
       .map((c) => c.trim().replace(/^"|"$/g, ""))
       .filter(Boolean);
-    const lower = columns.map((c) => c.toLowerCase());
-    const missing = required.filter((r) => !lower.includes(r));
-    if (missing.length > 0) {
+    
+    // Auto-detect column types
+    const detected = {
+      age: columns.find(col => COLUMN_PATTERNS.age.test(col)),
+      treatment: columns.find(col => COLUMN_PATTERNS.treatment.test(col)),
+      outcome: columns.find(col => COLUMN_PATTERNS.outcome.test(col)),
+      demographic: columns.filter(col => COLUMN_PATTERNS.demographic.test(col)),
+      clinical: columns.filter(col => COLUMN_PATTERNS.clinical.test(col)),
+      id: columns.find(col => COLUMN_PATTERNS.id.test(col))
+    };
+    
+    // Get a sample of data to analyze column types
+    const sampleRows = lines.slice(1, Math.min(6, lines.length)).map(line => 
+      line.split(',').map(cell => cell.trim().replace(/^"|"$/g, ""))
+    );
+    
+    const columnAnalysis = columns.map((col, idx) => {
+      const values = sampleRows.map(row => row[idx]).filter(v => v && v !== '');
+      const numericValues = values.filter(v => !isNaN(parseFloat(v)));
+      const uniqueValues = [...new Set(values)];
+      
       return {
-        ok: false,
-        errors: missing.map((column) => ({
-          code: "missing_column",
-          column,
-          message: `Required column "${column}" is missing.`,
-        })),
-        columns,
+        name: col,
+        index: idx,
+        type: numericValues.length > values.length * 0.8 ? 'numeric' : 
+              uniqueValues.length <= 10 ? 'categorical' : 'text',
+        uniqueCount: uniqueValues.length,
+        sampleValues: uniqueValues.slice(0, 5),
+        hasNumerics: numericValues.length > 0
       };
-    }
-    return { ok: true, errors: [], columns };
+    });
+    
+    return {
+      ok: true, // Always OK - we work with any CSV!
+      errors: [],
+      columns,
+      detected,
+      columnAnalysis,
+      suggestions: {
+        message: "CSV successfully analyzed. The system will auto-select the best columns for clinical analysis.",
+        totalColumns: columns.length,
+        totalRows: lines.length - 1,
+        detectedTypes: Object.entries(detected).filter(([_, v]) => v).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
+      }
+    };
   } catch (err) {
     return {
       ok: false,
@@ -104,9 +153,10 @@ function validateRRunOutput(output) {
 }
 
 module.exports = {
-  REQUIRED_INPUT_COLUMNS,
-  REQUIRED_OUTPUT_KEYS,
   validateUploadedCsv,
   validateCsvColumns,
   validateRRunOutput,
+  SUGGESTED_INPUT_COLUMNS,
+  REQUIRED_OUTPUT_KEYS,
+  COLUMN_PATTERNS,
 };

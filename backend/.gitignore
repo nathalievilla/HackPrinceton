@@ -4,6 +4,7 @@ npm-debug.log*
 # secrets
 .env
 .env.local
+vertex-ai-credentials.json
 
 # runtime data (per-job)
 uploads/
