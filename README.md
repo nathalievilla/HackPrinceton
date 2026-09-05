@@ -1,1 +1,1 @@
-# HackPrinceton
+# HackPrinceton Spring 2026
